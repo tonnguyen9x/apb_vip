@@ -1,0 +1,1440 @@
+//---------------------------------------------------------------------------
+// SDCARD DRIVER
+// luan.tran@brtchip.com
+// --------------------------------------------------------------------------
+class brt_sdcard_driver extends brt_driver #(brt_sdcard_packet);
+
+  virtual brt_sdcard_if vif;
+  brt_sdcard_config     brt_sdcard_cfg;
+  brt_analysis_port #(brt_sdcard_packet) sdcard_data_port;
+  brt_sdcard_packet sdcard_packet;
+
+  in_cmd_states in_cmd_states  = CMD_IDLE;
+  sdcard_states sdcard_states  = SD_IDLE;
+  bit [5:0]  CMD;
+  bit [5:0]  ACMD;
+  bit [135:0] output_reg;
+  bit [31:0]  crc_conuter;
+  bit [135:0] input_cmd;
+  bit [6:0]   sdcard_crc7_arr;
+  bit [15:0]  sdcard_crc16_arr;
+  bit [15:0]  sdcard_crc16_arr1;
+  bit [15:0]  sdcard_crc16_arr2;
+  bit [15:0]  sdcard_crc16_arr3;
+  bit r1_response;
+  bit r1b_response;
+  bit r2_response;
+  bit r3_response;
+  bit r6_response;
+  bit r7_response;
+  bit [119:0] csd_register;
+  bit [119:0] cid_register;
+  bit [31:0]  ocr_register;
+  bit [31:0]  card_status;
+  bit [15:0]  rca = 15'h1234;
+  bit [6:0] crc7b;
+  bit [15:0] crc16b_data3;
+  bit [15:0] crc16b_data2;
+  bit [15:0] crc16b_data1;
+  bit [15:0] crc16b_data0;
+  bit cmd_in_rdy;
+  bit cmd_resp_mode;
+  bit cmd_expect;
+  bit acmd_expect;
+  bit is_ocr_reg=0;
+  bit is_cid_reg=0;
+  bit is_csd_reg=0;
+  bit write=0;
+  bit read=0;
+  bit read_multiple=0;
+  bit write_multiple=0;
+  bit write_flag=0;
+  bit read_flag=0;
+  bit write_multiple_flag=0;
+  bit read_multiple_flag=0;
+  bit [7:0] write_register;
+  bit [7:0] write_data[$];
+  bit [7:0] read_register;
+  bit [7:0] read_data[$];
+  bit [31:0] write_counter;
+  bit [31:0] read_counter;
+  bit [11:0] block_size;
+  bit [15:0] block_count;
+  bit [31:0] in_counter;
+  bit operation_complete;
+  bit cmd0_present = 0;
+  bit [31:0] cmd_index=0;
+  bit [31:0] rsp_index=0;
+  bit [31:0] OCR_Register = 32'b1000_0000_0011_1111_1111_0000_0000_0001; //803f_f001
+  bit [31:0] address;
+  bit [31:0] crc_index;
+  bit [1:0]  data_bus_width;
+  bit [31:0] crc_counter;
+  bit [31:0] receive_sdcard_memory[$];
+  bit [31:0] transmit_sdcard_memory[$];
+  bit [7:0] byte_store[$];
+  bit [31:0] data0;
+  bit [39:0] card_memory_q[$]; //queue to modeling memory
+  bit [39:0] card_memory_data;
+  bit        addr_match = 0;
+
+  `define MEMORY_CAPACITY 2147483648 //2GBytes
+  
+  `brt_component_utils(brt_sdcard_driver)
+  function new(string name = "brt_sdcard_driver",brt_component parent = null);
+    super.new(name,parent);
+  endfunction
+
+  function void build_phase (brt_phase phase);
+    super.build_phase(phase);
+    `brt_info(get_type_name(),"build phase",UVM_LOW);
+    brt_config_db#(brt_sdcard_config)::get(this,"","brt_sdcard_config",brt_sdcard_cfg);
+    if (brt_sdcard_cfg == null) `brt_error(get_type_name(),"Configuration Error : SDCARD Configuration Object is not found");
+    data_bus_width = brt_sdcard_cfg.data_bus_width;
+    block_count = brt_sdcard_cfg.block_count;
+    block_size  = brt_sdcard_cfg.block_size;
+    operation_complete = brt_sdcard_cfg.operation_complete;
+  endfunction: build_phase
+
+  function void connect_phase(brt_phase phase);
+    super.connect_phase(phase);
+    brt_config_db #(virtual brt_sdcard_if)::get(this,"","sdcard_drv_if",vif);
+    if (vif == null) `brt_error(get_type_name(),"Configuration Error : SDCARD Interface is not connected !!!");
+    `brt_info(get_type_name(), "connect_phase", UVM_LOW);
+  endfunction: connect_phase
+
+  virtual function void start_of_simulation_phase(brt_phase phase);
+    super.start_of_simulation_phase(phase);
+    `brt_info(get_type_name(), "start_of_simulation_phase", UVM_LOW);
+  endfunction
+
+  virtual task run_phase (brt_phase phase);
+      
+    fork 
+      begin
+        in_cmd_decode();
+      end
+      begin
+        sdcard_state_machine();
+      end
+      begin
+        response_decode();
+      end
+      begin
+        sdcard_register_update();
+      end
+      begin
+        data_rw_decode();
+      end
+      begin
+        transmit_receive_flag_control();
+      end
+      begin
+        sdcard_memory_transmit_data1(); 
+      end
+      begin
+        sdcard_memory_transmit_data4(); 
+      end
+      begin
+        sdcard_memory_receive_data1(); 
+      end
+      begin
+        sdcard_memory_receive_data4(); 
+      end
+    join
+    
+  endtask
+
+  virtual task sdcard_mem_init (input bit [31:0] start_addr, input bit [7:0] byte_data_q[$]);
+    bit [31:0] byte_addr;
+    bit [39:0] card_memory_data;
+
+    byte_addr = start_addr;
+    card_memory_q.delete();
+
+    foreach (byte_data_q[i]) begin
+      card_memory_data[7:0]  = byte_data_q[i];
+      card_memory_data[39:8] = byte_addr;
+      card_memory_q.push_back(card_memory_data);
+      `brt_info(get_type_name(),$psprintf("SDMEMORY_INIT addr = 'h%h, data = 'h%h ",card_memory_data[39:8],card_memory_data[7:0]),UVM_LOW);
+      byte_addr = byte_addr + 1;
+    end 
+  endtask
+
+  virtual task in_cmd_decode();
+    fork 
+      begin 
+        forever begin
+          @(posedge vif.XCLK);
+          if (vif.XVDD == 0) begin
+            input_cmd  = `SDC_CMD_LEN'h0;
+            in_counter = 32'h0;
+            cmd_expect = 1;
+            acmd_expect= 0;
+          end
+          else begin
+            case (in_cmd_states)
+              CMD_IDLE : begin
+                if (vif.XCMD == 0) begin
+                  in_counter++;
+                  if ((is_cid_reg == 1) || (is_csd_reg == 1)) input_cmd = {input_cmd[134:0],vif.XCMD};
+                  else begin 
+                    input_cmd = {input_cmd[46:0],vif.XCMD};
+                  end 
+                  in_cmd_states = CMD_START;
+                end
+                else in_counter = 0;
+                if ((cmd_in_rdy == 1) || (cmd_resp_mode == 1)) begin
+                  cmd_in_rdy = 0;
+                  cmd_resp_mode = 0;
+                  CMD = 0;
+                  ACMD = 0;
+                end
+              end
+              CMD_START : begin
+                in_counter++;
+                if (vif.XCMD == 1)  begin
+                  input_cmd = {input_cmd[46:0],vif.XCMD};
+                  in_cmd_states = CMD_HOST_COMMAND;
+                end
+                else begin
+                  if ((is_cid_reg == 1) || (is_csd_reg == 1)) input_cmd = {input_cmd[134:0],vif.XCMD};
+                  else  begin 
+                    input_cmd = {input_cmd[46:0],vif.XCMD};
+                  end
+                  in_cmd_states = CMD_DEVICE_RESPONSE;
+                end
+              end
+              CMD_HOST_COMMAND: begin
+                in_counter++;
+                cmd_in_rdy = 0;
+                input_cmd = {input_cmd[46:0],vif.XCMD};
+                if(in_counter == `SDC_CMD_LEN) begin 
+                  in_cmd_states = CMD_HOST_END;
+                end
+              end
+              CMD_DEVICE_RESPONSE: begin
+                in_counter++;
+                cmd_resp_mode = 0;
+                if ((is_cid_reg == 1) || (is_csd_reg == 1)) begin
+                  input_cmd = {input_cmd[134:0],vif.XCMD};
+                  if(in_counter == `SDC_CID_CSD_LEN) begin 
+                    cmd_resp_mode = 1;
+                    in_cmd_states = CMD_DEVICE_RESPONSE_END;
+                    is_cid_reg = 0;
+                    is_csd_reg = 0;
+                  end
+                end
+                else begin
+                  input_cmd = {input_cmd[46:0],vif.XCMD};
+                  if(in_counter == `SDC_CMD_LEN) begin 
+                    in_cmd_states = CMD_DEVICE_RESPONSE_END;
+                  end
+                end
+              end
+              CMD_HOST_END: begin
+                in_cmd_states = CMD_IDLE;
+                cmd_index ++;
+                if ((acmd_expect == 1)&&(cmd_expect ==0)) begin 
+                  ACMD = input_cmd[45:40]; 
+                  vif.ACMD = ACMD;
+                  `brt_info(get_type_name(),$psprintf("ACMD = %0d",input_cmd[45:40]),UVM_LOW);
+                end
+                else  begin 
+                  CMD = input_cmd[45:40];
+                  vif.CMD = CMD;
+                  `brt_info(get_type_name(),$psprintf("CMD = %0d",input_cmd[45:40]),UVM_LOW);
+                end
+                cmd_in_rdy = 1;
+              end
+              CMD_DEVICE_RESPONSE_END: begin
+                cmd_resp_mode = 1;
+                rsp_index ++;
+                in_cmd_states = CMD_IDLE;
+              end
+            endcase
+          end
+        end
+      end
+    join_none
+
+    fork 
+      begin
+        forever begin
+          @(posedge vif.XCLK)
+          if((cmd_in_rdy == 1) && (input_cmd[45:40]==6'd55)) begin
+            @(posedge vif.XCLK)
+            cmd_expect = 0;
+            acmd_expect = 1;
+          end
+          else if ((cmd_in_rdy == 1) && (input_cmd[45:40]!=6'd55)) begin
+            @(posedge vif.XCLK)
+            cmd_expect = 1;
+            acmd_expect = 0;
+          end
+        end
+      end
+    join_none
+
+  endtask
+
+  virtual task sdcard_state_machine();
+    forever begin
+      @(posedge vif.XCLK or vif.XVDD)
+      if (vif.XVDD == 0) sdcard_states = SD_IDLE;
+      else begin
+        case (sdcard_states)
+          SD_INACTIVE:
+              begin
+                sdcard_states = SD_INACTIVE;
+              end
+          SD_IDLE    :
+              begin
+                if (CMD==6'd0 && cmd_in_rdy==1 && ACMD==6'd0) 
+                  sdcard_states = SD_IDLE;
+                else if (ACMD==6'd41  && cmd_in_rdy==1 && (input_cmd[39:8] & OCR_Register) == 32'h0) 
+                  sdcard_states = SD_INACTIVE;
+                else if (ACMD==6'd41  && cmd_in_rdy==1) begin
+                  sdcard_states = SD_READY;
+                  is_ocr_reg = 1;
+                end 
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if (CMD==6'd55 && cmd_in_rdy==1 )
+                  sdcard_states = SD_IDLE;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_IDLE;
+              end
+          SD_READY   :
+              begin
+                if (CMD==6'd0  && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states =  SD_IDLE;
+                else if (CMD ==6'd02  && cmd_in_rdy==1) begin
+                  sdcard_states = SD_IDENTIFICATION;
+                  is_cid_reg = 1;
+                end 
+                else if (CMD==6'd11 && cmd_in_rdy==1 )
+                  sdcard_states = SD_READY;
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_READY;
+              end
+          SD_IDENTIFICATION:
+              begin
+                if (CMD==6'd0  && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if (CMD==6'd03  && cmd_in_rdy==1)
+                  sdcard_states = SD_STAND_BY;
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_IDENTIFICATION;
+              end
+          SD_STAND_BY:
+              begin
+                if (CMD==6'd0  && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if ( (CMD==6'd3 || CMD==6'd4 || CMD==6'd09 || CMD==6'd10)  && cmd_in_rdy==1) begin
+                  sdcard_states = SD_STAND_BY;
+                  if (CMD ==6'd09) is_csd_reg = 1;
+                  if (CMD ==6'd10) is_cid_reg = 1;
+                end
+                else if (CMD==6'd07 && cmd_in_rdy==1 )
+                  sdcard_states = SD_TRANSFER;
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_STAND_BY;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_STAND_BY;
+              end
+          SD_TRANSFER:
+              begin
+                if (CMD==6'd0 && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if (CMD==6'd07 && cmd_in_rdy==1)
+                  sdcard_states = SD_STAND_BY;
+                else if ( (CMD==6'd20 || CMD==6'd28||CMD==6'd29||CMD==6'd38)&&cmd_in_rdy==1)
+                  sdcard_states = SD_PROGRAMMING;
+                else if ( (CMD==6'd24 || CMD==6'd25 || CMD==6'd26 || CMD==6'd27 || CMD==6'd42 || CMD==6'd49|| CMD==6'd56|| CMD==6'd59) && cmd_in_rdy==1)
+                  sdcard_states = SD_RECEIVE_DATA;
+                else if ( (CMD==6'd16 || CMD==6'd23 || CMD==6'd32 || CMD==6'd33 || ACMD==6'd6 || ACMD==6'd42 || ACMD==6'd23 ) && cmd_in_rdy==1 )
+                  sdcard_states = SD_TRANSFER;
+                else if ((CMD==6'd6 ||CMD==6'd17 || CMD==6'd18 ||CMD==6'd19 || CMD==6'd30 || CMD==6'd48 ||CMD==6'd56 || CMD==6'd58 ||ACMD==6'd13 ||ACMD==6'd22 ||ACMD==6'd51) && cmd_in_rdy==1)
+                  sdcard_states = SD_SENDING_DATA;
+                else if (CMD==6'd15 && cmd_in_rdy==1)
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_TRANSFER;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_TRANSFER;
+              end
+          SD_SENDING_DATA:
+              begin
+                if (CMD[0]==0 && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if (CMD==7  && cmd_in_rdy==1)
+                  sdcard_states = SD_STAND_BY;
+                else if (CMD==12  && cmd_in_rdy==1)
+                  sdcard_states = SD_TRANSFER;
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_SENDING_DATA;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_SENDING_DATA;
+              end
+          SD_RECEIVE_DATA:
+              begin
+                if (CMD==6'd0 && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if ((CMD==6'd12) && (cmd_in_rdy==1))
+                  sdcard_states = SD_PROGRAMMING;
+                else if (CMD==6'd15 && cmd_in_rdy==1)
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_RECEIVE_DATA;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_RECEIVE_DATA;
+              end
+          SD_PROGRAMMING:
+              begin
+                if (CMD==6'd0 && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if ( (CMD==6'd24 || CMD==6'd25 ) && cmd_in_rdy==1)
+                  sdcard_states = SD_RECEIVE_DATA;
+                else if ( brt_sdcard_cfg.operation_complete) begin
+                  sdcard_states = SD_TRANSFER;
+                end
+                else if ( CMD==6'd07  && cmd_in_rdy==1 )
+                  sdcard_states = SD_DISCONNECT;
+                else if (CMD==6'd15  && cmd_in_rdy==1)
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_PROGRAMMING;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_PROGRAMMING;
+              end
+          SD_DISCONNECT:
+              begin
+                if (CMD==6'd0  && cmd_in_rdy==1 && ACMD==6'd0)
+                  sdcard_states = SD_IDLE;
+                else if (brt_sdcard_cfg.operation_complete)
+                  sdcard_states = SD_STAND_BY;
+                else if ( CMD==6'd07  && cmd_in_rdy==1 )
+                  sdcard_states = SD_PROGRAMMING;
+                else if (CMD==6'd15 && cmd_in_rdy==1 )
+                  sdcard_states = SD_INACTIVE;
+                else if ((CMD==6'd13 ||CMD==6'd55)&& cmd_in_rdy==1 )
+                  sdcard_states = SD_DISCONNECT;
+                else if (cmd_in_rdy == 0) 
+                  sdcard_states = SD_DISCONNECT;
+              end
+          default : sdcard_states = sdcard_states;
+        endcase
+      end
+    end
+  endtask
+
+  task response_decode();
+    forever begin
+      @(posedge vif.XCLK);
+      if (cmd_in_rdy == 1) begin
+        case (input_cmd[45:40])
+          6'd02, 6'd09, 6'd10: begin
+                                   r2_response = 1'b1;
+                                  crc_counter = 120;
+                                  if (input_cmd[45:40]==6'd09)  output_reg = {2'b00,6'b111111,csd_register,crc7b,1'b1}; 
+                                  else                          output_reg = {2'b00,6'b111111,cid_register,crc7b,1'b1};
+                                  for (int i = crc_counter; i > 0; i--) sdcard_cal_crc7(output_reg[i+7]); 
+                                  output_reg[7:1] = crc7b;
+                                  sdcard_response_driver(crc_counter,output_reg);
+                                  vif.RSP_CMD = 6'b111111;
+                                end
+          6'd03:                begin
+                                   r6_response = 1'b1;
+                                  crc_counter = 40;
+                                  output_reg =  {2'b00, 6'h03,rca,card_status[23],card_status[22],card_status[19],card_status[12:0],crc7b,1'b1};
+                                  for (int i = crc_counter; i > 0; i--) sdcard_cal_crc7(output_reg[i+7]); 
+                                  output_reg[7:1] = crc7b;
+                                  sdcard_response_driver(crc_counter,output_reg);
+                                  vif.RSP_CMD = 6'b000011;
+                                end
+          6'd07, 6'd12, 6'd28, 6'd29, 6'd38, 
+          6'd42, 6'd56:         begin
+                                  r1b_response = 1'b1;
+                                  crc_counter = 40;
+                                  if (brt_sdcard_cfg.cmd_end_bit_error_en == 0) begin 
+                                    output_reg = {2'b00,input_cmd[45:40],card_status,crc7b,1'b1};
+                                  end
+                                  else  begin 
+                                    output_reg = {2'b00,input_cmd[45:40],card_status,crc7b,1'b0};
+                                    `brt_info(get_type_name(),"CMD end bit error inserted",UVM_LOW);
+                                  end
+                                  for (int i = crc_counter; i > 0; i--) sdcard_cal_crc7(output_reg[i+7]); 
+                                  output_reg[7:1] = crc7b;
+                                  sdcard_response_driver(crc_counter,output_reg);
+                                  vif.RSP_CMD = input_cmd[45:40];
+                                end
+          6'd55, 6'd13, 6'd16, 6'd17,6'd18, 6'd06,
+          6'd24, 6'd25, 6'd27, 6'd30, 6'd32, 
+          6'd33, 6'd55, 6'd22, 6'd23, 6'd42,6'd51, 6'd19, 6'd23 :   
+                                begin
+                                  r1_response = 1'b1;
+                                  crc_counter = 40;
+                                  if (brt_sdcard_cfg.cmd_index_error_en == 0) begin
+                                    output_reg = {2'b00,input_cmd[45:40],card_status,crc7b,1'b1};
+                                  end
+                                  else begin
+                                    output_reg = {2'b00,$urandom_range(6'b111111,0),card_status,crc7b,1'b1};
+                                    `brt_info(get_type_name(),"CMD index error inserted",UVM_LOW);
+                                  end
+                                  for (int i = crc_counter; i > 0; i--) sdcard_cal_crc7(output_reg[i+7]); 
+                                  if (brt_sdcard_cfg.cmd_crc_error_en==0) output_reg[7:1] = crc7b;
+                                  else begin 
+                                    output_reg[7:1] = $urandom_range(7'b1111111,0);
+                                    `brt_info(get_type_name(),"CMD CRC ERROR response inserted",UVM_LOW);
+                                  end
+                                  if (brt_sdcard_cfg.cmd_timeout_error_en == 1) 
+                                  begin
+                                    `brt_info(get_type_name(),$psprintf("brt_sdcard_cfg.cmd_timeout_error_en = %0d input_cmd[45:40] = %0d",brt_sdcard_cfg.cmd_timeout_error_en,input_cmd[45:40]),UVM_LOW);
+                                    #100000ns;
+                                  end
+                                  sdcard_response_driver(crc_counter,output_reg);
+                                  vif.RSP_CMD = input_cmd[45:40];
+                                  `brt_info(get_type_name(),$psprintf("brt_sdcard_cfg.cmd_timeout_error_en = %0d input_cmd[45:40] = %0d",brt_sdcard_cfg.cmd_timeout_error_en,input_cmd[45:40]),UVM_LOW);
+                                end
+          6'd41:                begin 
+                                  if (acmd_expect == 1) begin
+                                    r3_response = 1'b1;
+                                    crc_counter = 40;
+                                    output_reg =  {2'b00, 6'b111111, ocr_register,7'h7f,1'b1};
+                                    sdcard_response_driver(crc_counter,output_reg);
+                                    vif.RSP_CMD = 6'b111111;
+                                  end
+                                end
+          6'd08:                begin
+                                  r7_response = 1'b1;
+                                  crc_counter = 40;
+                                  output_reg =  {2'b00, 6'h08,20'h00000,4'b0001,input_cmd[15:8],crc7b,1'b1};
+                                  for (int i = crc_counter; i > 0; i--) sdcard_cal_crc7(output_reg[i+7]);
+                                  output_reg[7:1] = crc7b;
+                                  sdcard_response_driver(crc_counter,output_reg);
+                                  vif.RSP_CMD = input_cmd[45:40];
+                                end
+         default:               begin
+                                  `brt_info(get_type_name(),$psprintf("Unsuport Command detected, command = %d",input_cmd[45:40]),UVM_LOW);
+                                end
+        endcase
+      end
+      else begin
+        r1_response  = 0;
+        r1b_response = 0;
+        r2_response  = 0;
+        r3_response  = 0;
+        r6_response  = 0;
+        r7_response  = 0;
+      end
+    end
+  endtask
+
+  task sdcard_response_driver(input bit [31:0] _crc_counter,input bit [135:0] _output_reg);
+    repeat($urandom_range(10,4)) @(negedge vif.XCLK) vif.XCMD = 1;
+    if (_crc_counter == 40) begin
+      for (int i = 47; i>=0;i--) begin
+        @(negedge vif.XCLK);
+        vif.XCMD = #1ns _output_reg[i];
+      end
+      @(negedge vif.XCLK);
+      vif.XCMD = #1ns 1'bZ;
+      crc7b = 7'h0;
+      sdcard_crc7_arr=7'h0;
+    end
+    else begin
+      for (int i = 135; i>=0;i--) begin
+             @(negedge vif.XCLK);
+             vif.XCMD = #1ns _output_reg[i];
+         end
+             @(negedge vif.XCLK);
+             vif.XCMD =  #1ns 1'bZ;
+             crc7b = 7'h0;
+             sdcard_crc7_arr=7'h0;
+      end
+  endtask
+
+  virtual task data_rw_decode();
+    forever begin
+      @(posedge vif.XCLK or vif.XVDD); 
+      if (cmd_in_rdy == 1) begin
+        case (input_cmd[45:40]) 
+          6'd0 : begin
+                   cmd0_present = 1;
+                   write               = 0;
+                   write_flag          = 0;
+                   read                = 0;
+                   read_flag           = 0;
+                   write_multiple      = 0;
+                   read_multiple       = 0;
+                   write_multiple_flag = 0;
+                   read_multiple_flag  = 0;
+                   vif.XDATA3_CD = 1'bZ;
+                   vif.XDATA2    = 1'bZ;
+                   vif.XDATA1    = 1'bZ;
+                   vif.XDATA0    = 1'bZ;
+                   `brt_info(get_type_name(),"Receive CMD0",UVM_LOW);
+                 end  
+          6'd12: begin
+                   write_multiple      = 0;
+                   write               = 0;
+                   read                = 0;
+                   read_multiple       = 0;
+                   write_multiple_flag = 0;
+                   write_flag          = 0;
+                   read_flag           = 0;
+                   read_multiple_flag  = 0;
+                   vif.XDATA3_CD = 1'bZ;
+                   vif.XDATA2    = 1'bZ;
+                   vif.XDATA1    = 1'bZ;
+                   vif.XDATA0    = 1'bZ;
+                   `brt_info(get_type_name(),"Receive CMD12",UVM_LOW);
+                 end
+          6'd16: begin
+                   block_size = input_cmd[39:8];//default = 512bytes
+                 end
+          6'd23: begin
+                   block_count = input_cmd[39:8];//SDSC not support, affect with block_size = 512
+                 end
+          6'd17: begin
+                   if (read ==0) read = 1;
+                   address = input_cmd[39:8];
+                 end
+          6'd18: begin
+                   if (read_multiple ==0) read_multiple = 1;
+                   address = input_cmd[39:8];
+                   if (block_count == 0) `brt_error(get_type_name(),"block_count is not set up");
+                 end
+          6'd24: begin
+                   if (write ==0) begin
+                     write = 1;
+                   end
+                   address = input_cmd[39:8];
+                 end
+          6'd25: begin
+                   if (write_multiple == 0) write_multiple =1;
+                   address = input_cmd[39:8];
+                   if (block_count == 0) `brt_error(get_type_name(),"block_count is not set up");
+                 end
+          6'd06: begin
+                   if ((input_cmd[9:8]==2'b10)&&(acmd_expect == 1)) data_bus_width = 2'b10;
+                   else                       data_bus_width = 2'b00;
+                 end
+        endcase
+      end
+    end
+  endtask
+
+  virtual task sdcard_cal_crc7(input bit in);
+    //CRC calculation of bits being received
+    bit sdcard_crc7_0_nxt;
+    bit sdcard_crc7_3_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h in = %0h",sdcard_crc7_arr,in),UVM_HIGH);
+    sdcard_crc7_0_nxt = in ^ sdcard_crc7_arr[6];
+    sdcard_crc7_3_nxt = sdcard_crc7_0_nxt ^ sdcard_crc7_arr[2];
+    sdcard_crc7_arr[6] = sdcard_crc7_arr[5];
+    sdcard_crc7_arr[5] = sdcard_crc7_arr[4];
+    sdcard_crc7_arr[4] = sdcard_crc7_arr[3];
+    sdcard_crc7_arr[3] = sdcard_crc7_3_nxt;
+    sdcard_crc7_arr[2] = sdcard_crc7_arr[1];
+    sdcard_crc7_arr[1] = sdcard_crc7_arr[0];
+    sdcard_crc7_arr[0] = sdcard_crc7_0_nxt;
+    crc7b = sdcard_crc7_arr;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h ",sdcard_crc7_arr),UVM_HIGH);
+  endtask
+  virtual task sdcard_cal_crc16(input bit in);
+    //CRC calculation of bits being received
+    bit sdcard_crc16_0_nxt;
+    bit sdcard_crc16_5_nxt;
+    bit sdcard_crc16_12_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h in = %0h",sdcard_crc16_arr,in),UVM_HIGH);
+    sdcard_crc16_0_nxt = in ^ sdcard_crc16_arr[15];
+    sdcard_crc16_5_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr[4];
+    sdcard_crc16_12_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr[11];
+    sdcard_crc16_arr[15] = sdcard_crc16_arr[14];
+    sdcard_crc16_arr[14] = sdcard_crc16_arr[13];
+    sdcard_crc16_arr[13] = sdcard_crc16_arr[12];
+    sdcard_crc16_arr[12] = sdcard_crc16_12_nxt;
+    sdcard_crc16_arr[11] = sdcard_crc16_arr[10];
+    sdcard_crc16_arr[10] = sdcard_crc16_arr[9];
+    sdcard_crc16_arr[9]  = sdcard_crc16_arr[8];
+    sdcard_crc16_arr[8]  = sdcard_crc16_arr[7];
+    sdcard_crc16_arr[7]  = sdcard_crc16_arr[6];
+    sdcard_crc16_arr[6]  = sdcard_crc16_arr[5];
+    sdcard_crc16_arr[5]  = sdcard_crc16_5_nxt;
+    sdcard_crc16_arr[4]  = sdcard_crc16_arr[3];
+    sdcard_crc16_arr[3]  = sdcard_crc16_arr[2];
+    sdcard_crc16_arr[2]  = sdcard_crc16_arr[1];
+    sdcard_crc16_arr[1]  = sdcard_crc16_arr[0];
+    sdcard_crc16_arr[0]  = sdcard_crc16_0_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h",sdcard_crc16_arr),UVM_HIGH);
+  endtask
+  virtual task sdcard_cal_crc16_1(input bit in);
+    //CRC calculation of bits being received
+    bit sdcard_crc16_0_nxt;
+    bit sdcard_crc16_5_nxt;
+    bit sdcard_crc16_12_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h in = %0h",sdcard_crc16_arr1,in),UVM_HIGH);
+    sdcard_crc16_0_nxt = in ^ sdcard_crc16_arr1[15];
+    sdcard_crc16_5_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr1[4];
+    sdcard_crc16_12_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr1[11];
+    sdcard_crc16_arr1[15] = sdcard_crc16_arr1[14];
+    sdcard_crc16_arr1[14] = sdcard_crc16_arr1[13];
+    sdcard_crc16_arr1[13] = sdcard_crc16_arr1[12];
+    sdcard_crc16_arr1[12] = sdcard_crc16_12_nxt;
+    sdcard_crc16_arr1[11] = sdcard_crc16_arr1[10];
+    sdcard_crc16_arr1[10] = sdcard_crc16_arr1[9];
+    sdcard_crc16_arr1[9]  = sdcard_crc16_arr1[8];
+    sdcard_crc16_arr1[8]  = sdcard_crc16_arr1[7];
+    sdcard_crc16_arr1[7]  = sdcard_crc16_arr1[6];
+    sdcard_crc16_arr1[6]  = sdcard_crc16_arr1[5];
+    sdcard_crc16_arr1[5]  = sdcard_crc16_5_nxt;
+    sdcard_crc16_arr1[4]  = sdcard_crc16_arr1[3];
+    sdcard_crc16_arr1[3]  = sdcard_crc16_arr1[2];
+    sdcard_crc16_arr1[2]  = sdcard_crc16_arr1[1];
+    sdcard_crc16_arr1[1]  = sdcard_crc16_arr1[0];
+    sdcard_crc16_arr1[0]  = sdcard_crc16_0_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h",sdcard_crc16_arr1),UVM_HIGH);
+  endtask
+  virtual task sdcard_cal_crc16_2(input bit in);
+    //CRC calculation of bits being received
+    bit sdcard_crc16_0_nxt;
+    bit sdcard_crc16_5_nxt;
+    bit sdcard_crc16_12_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h in = %0h",sdcard_crc16_arr2,in),UVM_HIGH);
+    sdcard_crc16_0_nxt = in ^ sdcard_crc16_arr2[15];
+    sdcard_crc16_5_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr2[4];
+    sdcard_crc16_12_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr2[11];
+    sdcard_crc16_arr2[15] = sdcard_crc16_arr2[14];
+    sdcard_crc16_arr2[14] = sdcard_crc16_arr2[13];
+    sdcard_crc16_arr2[13] = sdcard_crc16_arr2[12];
+    sdcard_crc16_arr2[12] = sdcard_crc16_12_nxt;
+    sdcard_crc16_arr2[11] = sdcard_crc16_arr2[10];
+    sdcard_crc16_arr2[10] = sdcard_crc16_arr2[9];
+    sdcard_crc16_arr2[9]  = sdcard_crc16_arr2[8];
+    sdcard_crc16_arr2[8]  = sdcard_crc16_arr2[7];
+    sdcard_crc16_arr2[7]  = sdcard_crc16_arr2[6];
+    sdcard_crc16_arr2[6]  = sdcard_crc16_arr2[5];
+    sdcard_crc16_arr2[5]  = sdcard_crc16_5_nxt;
+    sdcard_crc16_arr2[4]  = sdcard_crc16_arr2[3];
+    sdcard_crc16_arr2[3]  = sdcard_crc16_arr2[2];
+    sdcard_crc16_arr2[2]  = sdcard_crc16_arr2[1];
+    sdcard_crc16_arr2[1]  = sdcard_crc16_arr2[0];
+    sdcard_crc16_arr2[0]  = sdcard_crc16_0_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h",sdcard_crc16_arr2),UVM_HIGH);
+  endtask
+  virtual task sdcard_cal_crc16_3(input bit in);
+    //CRC calculation of bits being received
+    bit sdcard_crc16_0_nxt;
+    bit sdcard_crc16_5_nxt;
+    bit sdcard_crc16_12_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h in = %0h",sdcard_crc16_arr3,in),UVM_HIGH);
+    sdcard_crc16_0_nxt = in ^ sdcard_crc16_arr3[15];
+    sdcard_crc16_5_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr3[4];
+    sdcard_crc16_12_nxt = sdcard_crc16_0_nxt ^ sdcard_crc16_arr3[11];
+    sdcard_crc16_arr3[15] = sdcard_crc16_arr3[14];
+    sdcard_crc16_arr3[14] = sdcard_crc16_arr3[13];
+    sdcard_crc16_arr3[13] = sdcard_crc16_arr3[12];
+    sdcard_crc16_arr3[12] = sdcard_crc16_12_nxt;
+    sdcard_crc16_arr3[11] = sdcard_crc16_arr3[10];
+    sdcard_crc16_arr3[10] = sdcard_crc16_arr3[9];
+    sdcard_crc16_arr3[9]  = sdcard_crc16_arr3[8];
+    sdcard_crc16_arr3[8]  = sdcard_crc16_arr3[7];
+    sdcard_crc16_arr3[7]  = sdcard_crc16_arr3[6];
+    sdcard_crc16_arr3[6]  = sdcard_crc16_arr3[5];
+    sdcard_crc16_arr3[5]  = sdcard_crc16_5_nxt;
+    sdcard_crc16_arr3[4]  = sdcard_crc16_arr3[3];
+    sdcard_crc16_arr3[3]  = sdcard_crc16_arr3[2];
+    sdcard_crc16_arr3[2]  = sdcard_crc16_arr3[1];
+    sdcard_crc16_arr3[1]  = sdcard_crc16_arr3[0];
+    sdcard_crc16_arr3[0]  = sdcard_crc16_0_nxt;
+    `brt_info(get_type_name(),$psprintf("Received CRC value = %h",sdcard_crc16_arr3),UVM_HIGH);
+  endtask
+
+  task sdcard_register_update();
+    fork
+      begin
+       forever begin
+        @(posedge vif.XCLK);
+         card_status ={
+                      brt_sdcard_cfg.OUT_OF_RANGE,
+                      brt_sdcard_cfg.ADDRESS_ERROR,
+                      brt_sdcard_cfg.BLOCK_LEN_ERROR,
+                      brt_sdcard_cfg.ERASE_SEQ_ERROR,
+                      brt_sdcard_cfg.ERASE_PARAM,
+                      brt_sdcard_cfg.WP_VIOLATION,
+                      brt_sdcard_cfg.CARD_IS_LOCKED,
+                      brt_sdcard_cfg.LOCK_UNLOCK_FAILED,
+                      brt_sdcard_cfg.COM_CRC_ERROR,
+                      brt_sdcard_cfg.ILLEGAL_COMMAND,
+                      brt_sdcard_cfg.CARD_ECC_FAILED,
+                      brt_sdcard_cfg.CARD_ECC_FAILED,
+                      brt_sdcard_cfg.CC_ERROR,
+                      brt_sdcard_cfg.ERROR,
+                      1'b0,
+                      1'b0,
+                      brt_sdcard_cfg.CSD_OVERWRITE,
+                      brt_sdcard_cfg.WP_ERASE_SKIP,
+                      brt_sdcard_cfg.CARD_ECC_DISABLED,
+                      brt_sdcard_cfg.ERASE_RESET,
+                      brt_sdcard_cfg.CURRENT_STATE,
+                      brt_sdcard_cfg.READY_FOR_DATA,
+                      1'b0,
+                      brt_sdcard_cfg.FX_EVENT,
+                      brt_sdcard_cfg.APP_CMD,
+                      1'b0,
+                      brt_sdcard_cfg.AKE_SEQ_ERROR,
+                      1'b0,
+                      1'b0,
+                      1'b0};
+         ocr_register = {
+                      brt_sdcard_cfg.OCR_31,
+                      brt_sdcard_cfg.OCR_30,
+                      brt_sdcard_cfg.OCR_29,
+                      4'h0,
+                      brt_sdcard_cfg.OCR_24,
+                      brt_sdcard_cfg.OCR_23,
+                      brt_sdcard_cfg.OCR_22,
+                      brt_sdcard_cfg.OCR_21,
+                      brt_sdcard_cfg.OCR_20,
+                      brt_sdcard_cfg.OCR_19,
+                      brt_sdcard_cfg.OCR_18,
+                      brt_sdcard_cfg.OCR_17,
+                      brt_sdcard_cfg.OCR_16,
+                      brt_sdcard_cfg.OCR_15,
+                      15'h0
+                      };
+         cid_register = {
+                      brt_sdcard_cfg.MID,
+                      brt_sdcard_cfg.OID,
+                      brt_sdcard_cfg.PNM,
+                      brt_sdcard_cfg.PRV,
+                      brt_sdcard_cfg.PSN,
+                      brt_sdcard_cfg.CID_reserved,
+                      brt_sdcard_cfg.MDT
+                      };
+         csd_register = {
+                      brt_sdcard_cfg.CSD_STRUCTURE,
+                      6'h0,
+                      brt_sdcard_cfg.TAAC,
+                      brt_sdcard_cfg.NSAC,
+                      brt_sdcard_cfg.TRAN_SPEED,
+                      brt_sdcard_cfg.CCC,
+                      brt_sdcard_cfg.READ_BL_LEN,
+                      brt_sdcard_cfg.READ_BL_PARTIAL,
+                      brt_sdcard_cfg.WRITE_BLK_MISALIGN,
+                      brt_sdcard_cfg.READ_BLK_MISALIGN,
+                      brt_sdcard_cfg.DSR_IMP,
+                      2'h0,
+                      brt_sdcard_cfg.C_SIZE,
+                      brt_sdcard_cfg.VDD_R_CURR_MIN,
+                      brt_sdcard_cfg.VDD_R_CURR_MAX,
+                      brt_sdcard_cfg.VDD_W_CURR_MIN,
+                      brt_sdcard_cfg.VDD_W_CURR_MAX,
+                      brt_sdcard_cfg.C_SIZE_MULT,
+                      brt_sdcard_cfg.ERASE_BLK_EN,
+                      brt_sdcard_cfg.SECTOR_SIZE,
+                      brt_sdcard_cfg.WP_GRP_SIZE,
+                      brt_sdcard_cfg.WP_GRP_ENABLE,
+                      2'h0,
+                      brt_sdcard_cfg.R2W_FACTOR,
+                      brt_sdcard_cfg.WRITE_BL_LEN,
+                      brt_sdcard_cfg.WRITE_BL_PARTIAL,
+                      5'h0,
+                      brt_sdcard_cfg.FILE_FORMAT_GRP,
+                      brt_sdcard_cfg.COPY,
+                      brt_sdcard_cfg.PERM_WRITE_PROTECT,
+                      brt_sdcard_cfg.TMP_WRITE_PROTECT,
+                      brt_sdcard_cfg.FLE_FORMAT,
+                      2'h0
+                      };
+        end
+      end
+    join_none
+  endtask
+
+  virtual task transmit_receive_flag_control();
+    fork 
+      begin
+        forever begin
+          @(posedge vif.XCLK);
+          `brt_info(get_type_name(),$psprintf("sdcard_states = %0x, write_multiple_flag = %0x, read_multiple_flag = %0x",sdcard_states, write_multiple_flag, read_multiple_flag),UVM_DEBUG);
+          if ((read_multiple == 1) && (cmd_resp_mode == 1) && (read_multiple_flag == 0))   
+            read_multiple_flag  = 1;
+          if ((read == 1) && (cmd_resp_mode == 1) && (read_flag == 0))
+            read_flag           = 1;
+          if ((write_multiple == 1) && (vif.XDATA0==0)&&(write_multiple_flag ==0)) begin
+            @(posedge vif.XCLK);
+            write_multiple_flag = 1;
+          end
+          if ((write == 1) && (vif.XDATA0==0)&&(write_flag ==0)) begin
+            @(posedge vif.XCLK);
+            write_flag          = 1;
+          end                          
+        end
+      end
+    join_none
+  endtask
+
+  virtual task sdcard_memory_transmit_data1();
+    int index;
+    fork 
+      begin
+        forever begin //Multiple transmit
+          @(negedge vif.XCLK);
+          if ((sdcard_states == SD_SENDING_DATA) && (data_bus_width == 2'b00) && (read_multiple_flag == 1)) begin
+            for (index = 0;index<block_count;index++) begin
+              if (sdcard_states != SD_SENDING_DATA) break;
+              for (int i = 0; i < $urandom_range(20,10);i++) begin
+                vif.XDATA0 = 1;
+                @(negedge vif.XCLK);
+              end
+              vif.XDATA0 = 0;//Start
+              sdcard_cal_crc16(1'b0);
+              @(negedge vif.XCLK);
+              for (int i=0;i<block_size;i++) begin //Data transmit
+                if (sdcard_states != SD_SENDING_DATA) break;
+                foreach (card_memory_q[i]) begin
+                  if (card_memory_q[i][39:8] == address) begin
+                    read_register = card_memory_q[i][7:0];
+                    addr_match = 1;
+                    `brt_info(get_type_name(),$psprintf("SDMEMORY_READ addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                  end
+                end
+                if (addr_match == 0) read_register = $urandom_range(8'hFF,0);
+                address = address + 1;
+                addr_match = 0;
+                for (int j=7;j>=0;j--) begin 
+                  vif.XDATA0 = read_register[j];
+                  sdcard_cal_crc16(read_register[j]);
+                  @(negedge vif.XCLK);
+                end
+                byte_store.push_back(read_register);
+                if (byte_store.size()==4) begin 
+                  data0[7:0]   = byte_store.pop_front();
+                  data0[15:8]  = byte_store.pop_front();
+                  data0[23:16] = byte_store.pop_front();
+                  data0[31:24] = byte_store.pop_front();
+                  `brt_info(get_type_name(),$psprintf("multiple 1bit dword read from SDCARD = %0x ",data0),UVM_LOW);
+                  transmit_sdcard_memory.push_back(data0);
+                end
+              end //for i 
+              for (int j=15;j>=0;j--) begin//CRC16 transmit 
+                vif.XDATA0 = sdcard_crc16_arr[j];
+                @(negedge vif.XCLK);
+              end
+              `brt_info(get_type_name(),$psprintf("sdcard_crc16_arr = %0x",sdcard_crc16_arr),UVM_LOW)
+              vif.XDATA0 = 1;//End
+              @(negedge vif.XCLK);
+              sdcard_crc16_arr        = 16'h0; //HD+
+            end //for index
+            read_multiple      = 0;
+            read_multiple_flag = 0;
+            @(negedge vif.XCLK);
+            vif.XDATA0 = 1'bZ;
+            @(negedge vif.XCLK);
+          end
+        end
+      end  
+      begin
+        forever begin //Single transmit
+          @(negedge vif.XCLK);
+          if ((sdcard_states == SD_SENDING_DATA) && (data_bus_width == 2'b00) && (read_flag == 1)) begin
+            for (int i = 0; i < $urandom_range(20,10);i++) begin
+              vif.XDATA0 = 1;
+              @(negedge vif.XCLK);
+            end
+            vif.XDATA0 = 0;//Start
+            sdcard_cal_crc16(1'b0);
+            @(negedge vif.XCLK);
+            for (int i=0;i<block_size;i++) begin //Data transmit
+              if (sdcard_states != SD_SENDING_DATA) break;
+              foreach (card_memory_q[i]) begin
+                if (card_memory_q[i][39:8] == address) begin
+                  read_register = card_memory_q[i][7:0];
+                  addr_match = 1;
+                  `brt_info(get_type_name(),$psprintf("SDMEMORY_READ addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                end
+              end
+              if (addr_match == 0) read_register = $urandom_range(8'hFF,0);
+              address = address + 1;
+              addr_match = 0;
+              for (int j=7;j>=0;j--) begin
+                 vif.XDATA0 = read_register[j];
+                 sdcard_cal_crc16(read_register[j]);
+                 @(negedge vif.XCLK);
+              end
+              byte_store.push_back(read_register);
+              if (byte_store.size()==4) begin 
+                data0[7:0]   = byte_store.pop_front();
+                data0[15:8]  = byte_store.pop_front();
+                data0[23:16] = byte_store.pop_front();
+                data0[31:24] = byte_store.pop_front();
+                `brt_info(get_type_name(),$psprintf("single 1bit dword read from SDCARD = %0x ",data0),UVM_LOW);
+                transmit_sdcard_memory.push_back(data0);
+              end
+            end  
+            for (int j=15;j>=0;j--) begin//CRC16 transmit 
+              vif.XDATA0 = sdcard_crc16_arr[j];
+              @(negedge vif.XCLK);
+            end
+            `brt_info(get_type_name(),$psprintf("sdcard_crc16_arr = %0x",sdcard_crc16_arr),UVM_LOW)
+            vif.XDATA0 = 1;//End
+            read = 0;
+            read_flag = 0;
+            sdcard_crc16_arr = 16'h0;
+            @(negedge vif.XCLK);
+            vif.XDATA0 = 1'bZ;//End
+            @(negedge vif.XCLK);
+          end
+        end
+      end
+    join_none
+  endtask
+
+  virtual task sdcard_memory_transmit_data4();
+    int index;
+    fork 
+      begin
+        forever begin
+          @(negedge vif.XCLK);
+          if ((sdcard_states == SD_SENDING_DATA) && (data_bus_width == 2'b10) && (read_multiple_flag == 1)) begin
+            for (index = 1;index<=block_count;index++) begin
+              if (sdcard_states != SD_SENDING_DATA) break;
+              for (int i = 0; i < $urandom_range(20,10);i++) begin
+                vif.XDATA0 = 1;
+                vif.XDATA1 = 1;
+                vif.XDATA2 = 1;
+                vif.XDATA3_CD = 1;
+                @(negedge vif.XCLK);
+              end
+              vif.XDATA0 = 0;//Start
+              vif.XDATA1 = 0;//Start
+              vif.XDATA2 = 0;//Start
+              vif.XDATA3_CD = 0;//Start
+              sdcard_cal_crc16(0);
+              sdcard_cal_crc16_1(0);
+              sdcard_cal_crc16_2(0);
+              sdcard_cal_crc16_3(0);
+              @(negedge vif.XCLK) ;
+              for (int i=0;i<block_size;i++) begin //Data Transmit
+                if (sdcard_states != SD_SENDING_DATA) break;
+                foreach (card_memory_q[i]) begin
+                  if (card_memory_q[i][39:8] == address) begin
+                    read_register = card_memory_q[i][7:0];
+                    addr_match = 1;
+                    `brt_info(get_type_name(),$psprintf("SDMEMORY_READ addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                  end
+                end 
+                if (addr_match == 0) read_register = $urandom_range(8'hFF,0);
+                address = address + 1;
+                addr_match = 0;
+                for (int j=2;j>0;j--) begin
+                  if (j==2) begin
+                    vif.XDATA3_CD = read_register[7];
+                    vif.XDATA2 = read_register[6];
+                    vif.XDATA1 = read_register[5];
+                    vif.XDATA0 = read_register[4];
+                    sdcard_cal_crc16_3(read_register[7]);
+                    sdcard_cal_crc16_2(read_register[6]);
+                    sdcard_cal_crc16_1(read_register[5]);
+                    sdcard_cal_crc16(read_register[4]);
+                    @(negedge vif.XCLK);
+                  end
+                  else begin
+                    vif.XDATA3_CD = read_register[3];
+                    vif.XDATA2    = read_register[2];
+                    vif.XDATA1    = read_register[1];
+                    vif.XDATA0    = read_register[0];
+                    sdcard_cal_crc16_3(read_register[3]);
+                    sdcard_cal_crc16_2(read_register[2]);
+                    sdcard_cal_crc16_1(read_register[1]);
+                    sdcard_cal_crc16(read_register[0]);
+                    @(negedge vif.XCLK);
+                    byte_store.push_back(read_register);
+                    if (byte_store.size()==4) begin 
+                      data0[7:0]   = byte_store.pop_front();
+                      data0[15:8]  = byte_store.pop_front();
+                      data0[23:16] = byte_store.pop_front();
+                      data0[31:24] = byte_store.pop_front();
+                      `brt_info(get_type_name(),$psprintf("multiple 4bit dword read from SDCARD = %0x ",data0),UVM_LOW);
+                      transmit_sdcard_memory.push_back(data0);
+                    end
+                  end
+                end //for j
+              end //for i (block size)
+              for (int i=15;i>=0;i--) begin //CRC16 Transmit
+                vif.XDATA3_CD = sdcard_crc16_arr3[i];
+                vif.XDATA2    = sdcard_crc16_arr2[i];
+                vif.XDATA1    = sdcard_crc16_arr1[i];
+                vif.XDATA0    = sdcard_crc16_arr[i];
+                @(negedge vif.XCLK);
+              end
+              vif.XDATA3_CD = 1;//End
+              vif.XDATA2    = 1;//End
+              vif.XDATA1    = 1;//End
+              vif.XDATA0    = 1;//End
+              sdcard_crc16_arr = 16'h0;
+              sdcard_crc16_arr1= 16'h0;
+              sdcard_crc16_arr2= 16'h0;
+              sdcard_crc16_arr3= 16'h0;
+              @(negedge vif.XCLK) ;
+            end //for index
+            read_multiple = 0;
+            read_multiple_flag = 0;
+            @(negedge vif.XCLK);
+            vif.XDATA3_CD = 1'bZ;
+            vif.XDATA2    = 1'bZ;
+            vif.XDATA1    = 1'bZ;
+            vif.XDATA0    = 1'bZ;
+            @(negedge vif.XCLK);
+          end //if 
+        end //forever begin
+      end  
+      begin
+        forever begin
+          @(negedge vif.XCLK);
+          if ((sdcard_states == SD_SENDING_DATA) && (data_bus_width == 2'b10) && (read_flag == 1)) begin
+            for (int i = 0; i < $urandom_range(20,10);i++) begin
+              vif.XDATA0 = 1;
+              vif.XDATA1 = 1;
+              vif.XDATA2 = 1;
+              vif.XDATA3_CD = 1;
+              if (brt_sdcard_cfg.data_timeout_error_en == 1) begin
+                #100000ns;
+              end
+              @(negedge vif.XCLK);
+            end
+            vif.XDATA0 = 0;//Start
+            vif.XDATA1 = 0;//Start
+            vif.XDATA2 = 0;//Start
+            vif.XDATA3_CD = 0;//Start
+            sdcard_cal_crc16(0);
+            sdcard_cal_crc16_1(0);
+            sdcard_cal_crc16_2(0);
+            sdcard_cal_crc16_3(0);
+            @(negedge vif.XCLK) ;
+            for (int i=0;i<block_size;i++) begin
+              if (sdcard_states != SD_SENDING_DATA) break;
+              foreach (card_memory_q[i]) begin
+                if (card_memory_q[i][39:8] == address) begin
+                  read_register = card_memory_q[i][7:0];
+                  addr_match = 1;
+                  `brt_info(get_type_name(),$psprintf("SDMEMORY_READ addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                end
+              end 
+              if (addr_match == 0) read_register = $urandom_range(8'hFF,0);
+              address = address + 1;
+              addr_match = 0;
+              for (int j=2;j>0;j--) begin
+                if (j==2) begin
+                  vif.XDATA3_CD = read_register[7];
+                  vif.XDATA2    = read_register[6];
+                  vif.XDATA1    = read_register[5];
+                  vif.XDATA0    = read_register[4];
+                  sdcard_cal_crc16_3(read_register[7]);
+                  sdcard_cal_crc16_2(read_register[6]);
+                  sdcard_cal_crc16_1(read_register[5]);
+                  sdcard_cal_crc16(read_register[4]);
+                  @(negedge vif.XCLK);
+                end
+                else begin
+                  vif.XDATA3_CD = read_register[3];
+                  vif.XDATA2    = read_register[2];
+                  vif.XDATA1    = read_register[1];
+                  vif.XDATA0    = read_register[0];
+                  sdcard_cal_crc16_3(read_register[3]);
+                  sdcard_cal_crc16_2(read_register[2]);
+                  sdcard_cal_crc16_1(read_register[1]);
+                  sdcard_cal_crc16(read_register[0]);
+                  @(negedge vif.XCLK);
+                  byte_store.push_back(read_register);
+                  if (byte_store.size()==4) begin 
+                       data0[7:0]   = byte_store.pop_front();
+                       data0[15:8]  = byte_store.pop_front();
+                       data0[23:16] = byte_store.pop_front();
+                       data0[31:24] = byte_store.pop_front();
+                       `brt_info(get_type_name(),$psprintf("single 4bit dword read from SDCARD = %0x",data0),UVM_HIGH);
+                       transmit_sdcard_memory.push_back(data0);
+                  end
+                end
+              end //for j
+            end //for i
+            for (int i=15;i>=0;i--) begin //CRC16 Transmit
+              if (brt_sdcard_cfg.data_crc_error_en == 0) begin
+                vif.XDATA3_CD = sdcard_crc16_arr3[i];
+                vif.XDATA2    = sdcard_crc16_arr2[i];
+                vif.XDATA1    = sdcard_crc16_arr1[i];
+                vif.XDATA0    = sdcard_crc16_arr[i];
+              end
+              else begin
+                vif.XDATA3_CD = $urandom_range(1,0);
+                vif.XDATA2    = $urandom_range(1,0);
+                vif.XDATA1    = $urandom_range(1,0);
+                vif.XDATA0    = $urandom_range(1,0);
+                `brt_info(get_type_name(),"DATA CRC ERROR GEN 4Bit DATA",UVM_LOW);
+              end
+              @(negedge vif.XCLK);
+            end
+            if (brt_sdcard_cfg.data_end_bit_error_en == 0) begin
+              vif.XDATA3_CD = 1;//End
+              vif.XDATA2    = 1;//End
+              vif.XDATA1    = 1;//End
+              vif.XDATA0    = 1;//End
+            end
+            else begin
+              `brt_info(get_type_name(),"End of Transmit Single Data 4Bit with Data End Bit Error",UVM_LOW);
+              vif.XDATA3_CD = 0;//End
+              vif.XDATA2    = 0;//End
+              vif.XDATA1    = 0;//End
+              vif.XDATA0    = 0;//End
+            end
+            @(negedge vif.XCLK); 
+            read = 0;
+            read_flag = 0;
+            sdcard_crc16_arr = 16'h0;
+            sdcard_crc16_arr1= 16'h0;
+            sdcard_crc16_arr2= 16'h0;
+            sdcard_crc16_arr3= 16'h0;
+            @(negedge vif.XCLK); 
+          end //if
+        end //forever begin
+      end
+    join_none
+  endtask
+
+  virtual task sdcard_memory_receive_data1();
+    int index;
+    fork 
+      begin
+        forever begin //Multiple Receive
+          @(posedge vif.XCLK);
+          if ((sdcard_states == SD_RECEIVE_DATA) && (data_bus_width == 2'b00) && (write_multiple_flag == 1)) begin
+            for (index = 1;index<=block_count;index++) begin
+              if (sdcard_states != SD_RECEIVE_DATA) break;
+              wait(write_multiple_flag);//for next transaction
+              for (int i=0;i<block_size;i++) begin //Receive data
+                if (sdcard_states != SD_RECEIVE_DATA) break;
+                for (int j=7;j>=0;j--) begin
+                  write_register[j]=vif.XDATA0;
+                  @(posedge vif.XCLK);
+                end //for j
+                byte_store.push_back(write_register);
+                foreach (card_memory_q[i]) begin
+                  if (card_memory_q[i][39:8] == address) begin //write to the address had data
+                    card_memory_q[i][7:0] = write_register;
+                    `brt_info(get_type_name(),$psprintf("SDMEMORY_REWRITE addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                    addr_match = 1;
+                  end
+                end
+                if (addr_match == 0) begin //write to address blank data
+                  card_memory_data = {address,write_register};
+                  card_memory_q.push_back(card_memory_data);
+                  `brt_info(get_type_name(),$psprintf("SDMEMORY_WRITE addr = 'h%h, data = 'h%h ",card_memory_data[39:8],card_memory_data[7:0]),UVM_LOW);
+                end
+                addr_match = 0;
+                address = address + 1;
+                if (byte_store.size()==4) begin 
+                  data0[7:0]   = byte_store.pop_front();
+                  data0[15:8]  = byte_store.pop_front();
+                  data0[23:16] = byte_store.pop_front();
+                  data0[31:24] = byte_store.pop_front();
+                  `brt_info(get_type_name(),$psprintf("multiple 1bit dword write to SDCARD = %0x ",data0),UVM_LOW);
+                  receive_sdcard_memory.push_back(data0);
+                end
+              end //for i 
+              repeat (16) @(posedge vif.XCLK);//CRC16
+              @(posedge vif.XCLK);           //End
+              write_multiple_flag =0;
+              if (index == block_count) begin 
+                write_multiple = 0;
+                write_multiple_flag = 0;
+              end
+            end //for index
+          end //if
+        end //forever
+      end //begin
+      begin
+        forever begin //Single Receive
+          @(posedge vif.XCLK);
+          if ((sdcard_states == SD_RECEIVE_DATA) && (data_bus_width == 2'b00) && (write_flag == 1)) begin
+            for (int i=0;i<block_size;i++) begin
+              if (sdcard_states != SD_RECEIVE_DATA) break;
+              for (int j=7;j>=0;j--) begin 
+                write_register[j]=vif.XDATA0;
+                @(posedge vif.XCLK);
+              end
+              byte_store.push_back(write_register);
+              foreach (card_memory_q[i]) begin
+                if (card_memory_q[i][39:8] == address) begin //write to the address had data
+                  card_memory_q[i][7:0] = write_register;
+                  `brt_info(get_type_name(),$psprintf("SDMEMORY_REWRITE addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                  addr_match = 1;
+                end
+              end
+              if (addr_match == 0) begin //write to address blank data
+                card_memory_data = {address,write_register};
+                card_memory_q.push_back(card_memory_data);
+                `brt_info(get_type_name(),$psprintf("SDMEMORY_WRITE addr = 'h%h, data = 'h%h ",card_memory_data[39:8],card_memory_data[7:0]),UVM_LOW);
+              end
+              addr_match = 0;
+              address = address + 1;
+              if (byte_store.size()==4) begin 
+                data0[7:0]   = byte_store.pop_front();
+                data0[15:8]  = byte_store.pop_front();
+                data0[23:16] = byte_store.pop_front();
+                data0[31:24] = byte_store.pop_front();
+                `brt_info(get_type_name(),$psprintf("single 1bit dword write to SDCARD = %0x ",data0),UVM_LOW);
+                receive_sdcard_memory.push_back(data0);
+              end
+            end  
+            repeat (16) @(posedge vif.XCLK);//CRC16
+            @(posedge vif.XCLK);          //End
+            write = 0;
+            write_flag = 0;
+          end
+        end
+      end
+    join_none
+
+  endtask
+
+  virtual task sdcard_memory_receive_data4();
+    int index;
+    fork 
+      begin
+        forever begin
+          @(posedge vif.XCLK);
+          if ((sdcard_states == SD_RECEIVE_DATA) && (data_bus_width == 2'b10) && (write_multiple_flag == 1)) begin
+            for (index = 1;index<=block_count;index++) begin
+              if (sdcard_states != SD_RECEIVE_DATA) break;
+              wait(write_multiple_flag);//for next transaction
+              for (int i=0;i<block_size;i++) begin
+                if (sdcard_states != SD_RECEIVE_DATA) break;
+                for (int j=2;j>0;j--) begin
+                  if (j==2) begin
+                    write_register[7]=vif.XDATA3_CD;
+                    write_register[6]=vif.XDATA2;
+                    write_register[5]=vif.XDATA1;
+                    write_register[4]=vif.XDATA0;
+                    @(posedge vif.XCLK);
+                  end
+                  else begin
+                    write_register[3]=vif.XDATA3_CD;
+                    write_register[2]=vif.XDATA2;
+                    write_register[1]=vif.XDATA1;
+                    write_register[0]=vif.XDATA0;
+                    @(posedge vif.XCLK);
+                    byte_store.push_back(write_register);
+                    foreach (card_memory_q[i]) begin
+                      if (card_memory_q[i][39:8] == address) begin //write to the address had data
+                        card_memory_q[i][7:0] = write_register;
+                        `brt_info(get_type_name(),$psprintf("SDMEMORY_REWRITE addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                        addr_match = 1;
+                      end
+                    end
+                    if (addr_match == 0) begin //write to address blank data
+                      card_memory_data = {address,write_register};
+                      card_memory_q.push_back(card_memory_data);
+                      `brt_info(get_type_name(),$psprintf("SDMEMORY_WRITE addr = 'h%h, data = 'h%h ",card_memory_data[39:8],card_memory_data[7:0]),UVM_LOW);
+                    end
+                    addr_match = 0;
+                    address = address + 1;
+                  end
+                  if (byte_store.size()==4) begin 
+                    data0[7:0]   = byte_store.pop_front();
+                    data0[15:8]  = byte_store.pop_front();
+                    data0[23:16] = byte_store.pop_front();
+                    data0[31:24] = byte_store.pop_front();
+                    `brt_info(get_type_name(),$psprintf("multiple 4bit dword write to SDCARD = %0x ",data0),UVM_LOW);
+                    receive_sdcard_memory.push_back(data0);
+                  end
+                end //for j
+              end //for i
+              repeat(16) @(posedge vif.XCLK);//CRC16
+              @(posedge vif.XCLK); //End
+              write_multiple_flag =0;
+              if (index == block_count) begin 
+                write_multiple = 0;
+                write_multiple_flag = 0;
+              end   
+            end //for index
+          end //if
+        end //forever begin
+      end //fork begin-end 
+      begin
+        forever begin
+          @(posedge vif.XCLK);
+          if ((sdcard_states == SD_RECEIVE_DATA) && (data_bus_width == 2'b10) && (write_flag == 1)) begin
+            for (int i=0;i<block_size;i++) begin
+              if (sdcard_states != SD_RECEIVE_DATA) break;
+              for (int j=2;j>0;j--) begin
+                if (j==2) begin
+                  write_register[7]=vif.XDATA3_CD;
+                  write_register[6]=vif.XDATA2;
+                  write_register[5]=vif.XDATA1;
+                  write_register[4]=vif.XDATA0;
+                  @(posedge vif.XCLK);
+                end
+                else begin
+                  write_register[3]=vif.XDATA3_CD;
+                  write_register[2]=vif.XDATA2;
+                  write_register[1]=vif.XDATA1;
+                  write_register[0]=vif.XDATA0;
+                  @(posedge vif.XCLK);
+                  byte_store.push_back(write_register);
+                  foreach (card_memory_q[i]) begin
+                    if (card_memory_q[i][39:8] == address) begin //write to the address had data
+                      card_memory_q[i][7:0] = write_register;
+                      `brt_info(get_type_name(),$psprintf("SDMEMORY_REWRITE addr = 'h%h, data = 'h%h ",card_memory_q[i][39:8],card_memory_q[i][7:0]),UVM_LOW);
+                      addr_match = 1;
+                    end
+                  end
+                  if (addr_match == 0) begin //write to address blank data
+                    card_memory_data = {address,write_register};
+                    card_memory_q.push_back(card_memory_data);
+                    `brt_info(get_type_name(),$psprintf("SDMEMORY_WRITE addr = 'h%h, data = 'h%h ",card_memory_data[39:8],card_memory_data[7:0]),UVM_LOW);
+                  end
+                  addr_match = 0;
+                  address = address + 1;
+                  if (byte_store.size()==4) begin 
+                    data0[7:0]   = byte_store.pop_front();
+                    data0[15:8]  = byte_store.pop_front();
+                    data0[23:16] = byte_store.pop_front();
+                    data0[31:24] = byte_store.pop_front();
+                    `brt_info(get_type_name(),$psprintf("single 4bit dword write to SDCARD = %0x ",data0),UVM_LOW);
+                    receive_sdcard_memory.push_back(data0);
+                  end
+                end
+              end
+            end  
+            repeat(16) @(posedge vif.XCLK);//CRC16
+            @(posedge vif.XCLK);//End
+            write = 0;
+            write_flag = 0;
+          end
+        end
+      end
+    join_none
+  endtask
+
+  virtual function void report_phase(brt_phase phase);
+    if (receive_sdcard_memory.size() >0 ) `brt_info(get_type_name(),$psprintf("receive sdcard_memory size()=%0d",receive_sdcard_memory.size()),UVM_LOW);
+    while (receive_sdcard_memory.size()) begin
+      `brt_info(get_type_name(),$psprintf("receive sdcard_memory data =%0x",receive_sdcard_memory.pop_front()),UVM_LOW);
+    end
+    if (transmit_sdcard_memory.size() >0 ) `brt_info(get_type_name(),$psprintf("transmit sdcard_memory size()=%0d",transmit_sdcard_memory.size()),UVM_LOW);
+    while (transmit_sdcard_memory.size()) begin
+      `brt_info(get_type_name(),$psprintf("transmit sdcard_memory data =%0x",transmit_sdcard_memory.pop_front()),UVM_LOW);
+    end
+  endfunction
+endclass : brt_sdcard_driver
