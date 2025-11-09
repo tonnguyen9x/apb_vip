@@ -1,0 +1,53 @@
+*System requirement*
+1. VCS version is as least vcs-2015.x
+
+*History*
+|Date           | Author     | Update point
+|22 Dec, 2016   | DucDinh    | Finish host VIP test patterns
+|6  Mar, 2017   | DucDinh    | Add timing checker inside the VIP for reset handshake              
+                             | Add LS mode                                    
+                             | Upgrade USB device mode to support full feature
+                             | Add monitor mode only
+
+-------------------------------------------------------------------------------------
+*Support mode*
+Mode 1: USB Host only
+Mode 2: USB Host + Monitor
+Mode 3: USB Device only
+Mode 4: USB Device + Monitor
+Mode 5: USB Monitor only
+
+*How to instant this VIP to env*
+refs: trunk/brtvip/vips/brt_usb/verif/sv/brt_usb_env.sv
+
+Mode 1: USB Host only
+a) Instance the host agent
+b) Set USB interface to host agent
+c) Parse config to host agent
+d) Add callback for using error injection (optional)
+
+Mode 2: USB Host + Monitor
+a) Instance the host agent
+b) Set USB interface to host agent
+c) Parse config to host agent
+d) Add callback for using error injection (optional)
+e) Enable monior of host agent to check the incoming packet
+
+Mode 3: USB Device only
+a) Instance the device agent
+b) Set USB interface to device agent
+c) Parse config to device agent
+d) Add callback for modifying transfer size and using error injection
+
+Mode 4: USB Device + Monitor
+a) Instance the device agent
+b) Set USB interface to device agent
+c) Parse config to device agent
+d) Add callback for modifying transfer size and using error injection
+e) Enable monior to check the incoming packet
+
+Mode 5: USB Monitor only (use in case not inclusing host/device VIP)
+a) Instance the monitor agent
+b) Set USB interface to monitor agent
+c) Create new config for monitor agent, use as device mode
+d) Disable vip_enable and set mon_enable monior to check the incoming packet

@@ -1,0 +1,90 @@
+# This Makefile is only for testing USB VIP
+# Example: $> make TESTNAME="usb_enum_suspend_wake_test" run
+
+TESTNAME 	?= usb_enum_bulk_in_test
+SPEED       ?= fs
+LOGDIR 		?= log
+REGRESSDIR 	?= ./20150401FS/
+#REGRESSDIR ?= ./20150401HS/
+#SIMPROFILE ?= -simprofile time
+#SIMPROFILE ?= -simprofile mem
+SIMPROFILE 	?=
+SERVERITY 	?= UVM_HIGH
+#ODIR 		?= ../test/
+RUNARG 		= +brt_usb_dev_speed=${SPEED}
+SEED      	?= random
+realtime    := $(shell /bin/date +%s)
+
+ifeq ($(strip ${SEED}),random)
+	ARG_SEED = +ntb_random_seed=${realtime}
+	NEW_SEED = ${realtime}
+else
+	ARG_SEED = +ntb_random_seed=${SEED}
+	NEW_SEED = ${SEED}
+endif
+
+$(info $$ARG_SEED is [${ARG_SEED}])
+
+LOGNAME     = ${TESTNAME}_${SPEED}_${NEW_SEED}
+
+$(info $$LOGNAME is [${LOGNAME}])
+
+all: work build run
+
+regress: build run_all
+
+run_all:
+	mkdir -p ${REGRESSDIR}; \
+	for UvmTest in $(UVMTESTS); do \
+		./simv +vcs+lic+wait ${RUNARG} +UVM_TR_RECORD +UVM_LOG_RECORD  +UVM_LOGNAME=$$UvmTest -l ../${REGRESSDIR}/$$UvmTest.log; \
+	done
+
+work:
+	mkdir -p ${ODIR}./${LOGDIR}
+
+tar:
+	tar -cvzf ftdi_vip.tgz ../AGENT  ../sv
+
+build:
+	vcs -f vip_tb.list \
+            -kdb \
+	    -cm_dir ./coverage/cov.vdb \
+       +vcs+vcdpluson -debug_all +notimingchecks -lca -sverilog  +v2k -full64 +evalorder -ntb_opts uvm-1.1  \
+       -unit_timescale=1ps/1ps -l ${ODIR}./comp.log -o ${ODIR}./simv -Mdirectory=${ODIR}./csrc
+
+run:
+	${ODIR}./simv \
+	       -cm_name ${LOGNAME} \
+	       +vcs+lic+wait $(SIMPROFILE) ${RUNARG} +ntb_random_seed=${SEED} +UVM_VERBOSITY=${SERVERITY} +UVM_TR_RECORD +UVM_LOG_RECORD  +UVM_TESTNAME=${TESTNAME}  -l ${ODIR}./${LOGDIR}/${LOGNAME}.log
+	ln -sf ${ODIR}./${LOGDIR}/${LOGNAME}.log sim.log
+
+log:
+	vi ${ODIR}./${LOGDIR}/${LOGNAME}.log
+
+dve:
+	dve -vpd vcdplus.vpd -full64  &
+
+urg:
+	urg -dir coverage/cov.vdb -report ocov
+
+urgtext:
+	urg -dir coverage/cov.vdb -report ocov -format text
+
+hvp:
+	hvp annotate -plan ${VPLAN} -dir coverage/cov.vdb
+
+clean:
+	rm -f 1
+	rm -f *.log
+	rm -f *.trace
+	rm -rf csrc
+	rm -rf DVE*
+	rm -rf dve*
+	rm -f  novas*
+	rm -rf simv*
+	rm -f vcd*
+	rm -rf verdi*
+	rm -f ucli.key
+	rm -f vc_hdrs.h
+	rm -rf log/*
+

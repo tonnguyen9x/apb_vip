@@ -1,0 +1,7 @@
+`include "brt_usb_virtual_sequence.svh"
+`include "brt_usb_packet2data_sequence.svh"
+`include "brt_usb_xfer2packet_sequence.svh"
+`include "brt_usb_xfer_router_sequence.svh"
+`include "brt_usb_sof_pkt_sequence.svh"
+`include "brt_usb_protservice_sequence.svh"
+`include "brt_usb_linkservice_sequence.svh"

@@ -1,0 +1,95 @@
+Command: /home/ton.nguyensinh/99_USB_VIP/00_usb/BT_VIP_000005/trunk/brtvip/vips/brt_usb/verif/tb/./simv -cm_name brt_usb_control_random_vseq_test_fs_1 +vcs+lic+wait +brt_usb_dev_speed=fs +ntb_random_seed=1 +UVM_VERBOSITY=UVM_HIGH +UVM_TR_RECORD +UVM_LOG_RECORD +UVM_TESTNAME=brt_usb_control_random_vseq_test -l ./log/brt_usb_control_random_vseq_test_fs_1.log +define+UVM_DIRECTC_OPTS
+Chronologic VCS simulator copyright 1991-2021
+Contains Synopsys proprietary information.
+Compiler version S-2021.09-SP2-4_Full64; Runtime version S-2021.09-SP2-4_Full64;  Jun 10 16:30 2024
+----------------------------------------------------------------
+UVM-1.1d.Synopsys
+(C) 2007-2013 Mentor Graphics Corporation
+(C) 2007-2013 Cadence Design Systems, Inc.
+(C) 2006-2013 Synopsys, Inc.
+(C) 2011-2013 Cypress Semiconductor Corp.
+----------------------------------------------------------------
+
+  ***********       IMPORTANT RELEASE NOTES         ************
+
+  You are using a version of the UVM library that has been compiled
+  with `UVM_NO_DEPRECATED undefined.
+  See http://www.eda.org/svdb/view.php?id=3313 for more details.
+
+  You are using a version of the UVM library that has been compiled
+  with `UVM_OBJECT_MUST_HAVE_CONSTRUCTOR undefined.
+  See http://www.eda.org/svdb/view.php?id=3770 for more details.
+
+      (Specify +UVM_NO_RELNOTES to turn off this notice)
+
+VCD+ Writer S-2021.09-SP2-4_Full64 Copyright (c) 1991-2021 by Synopsys Inc.
+UVM_INFO /tools/synopsys/vcsmx/S-2021.09-SP2-4/etc/uvm-1.1/vcs/uvm_custom_install_vcs_recorder.sv(87) @ 0: reporter [VCS_TR_AUTO] +UVM_TR_RECORD implicitly enables recording_details to UVM_FULL for all components. For explicit control use +UVM_DISABLE_AUTO_COMPONENT and set recording_detail on components accordingly
+UVM_INFO @ 0: uvm_test_top [RANDOM] unnamed$$_1(): seed=0x57dea13c
+UVM_INFO @ 0: reporter [RNTST] Running test brt_usb_control_random_vseq_test...
+UVM_INFO /home/ton.nguyensinh/99_USB_VIP/00_usb/BT_VIP_000005/trunk/brtvip/vips/brt_usb/verif/sv/brt_usb_tb_top.sv(38) @ 0: reporter [Testbench] current time 
+UVM_INFO /home/ton.nguyensinh/99_USB_VIP/00_usb/BT_VIP_000005/trunk/brtvip/vips/brt_usb/verif/testcases/brt_usb_test.sv(35) @ 0: uvm_test_top [uvm_test_top] dev_speed fs
+UVM_WARNING /home/ton.nguyensinh/99_USB_VIP/00_usb/BT_VIP_000005/trunk/brtvip/vips/brt_usb/verif/../design/brt_usb_base_config.sv(571) @ 0: reporter [setup_brt_usb_20_defaults] The max_brt_usb_20_endpoints property is set to 16. Configured 7 endpoints. Other endpoints must be configured in the testcase.
+
+Warning-[MSGLOG-LARGE_STR] Msglog string too large.
+/tools/synopsys/vcsmx/S-2021.09-SP2-4/etc/uvm-1.1/vcs/uvm_vcs_record_interface.sv, 228
+  Msglog string length (23358) too large to store in VPD file. Only the first 
+  10000 charcters will be stored in the VPD file.The first 40 characters of 
+  the string is: "<html>/home/ton.nguyensinh/99_USB_VIP/00".
+  Please reduce the size of the msglog string.
+
+UVM_INFO /home/ton.nguyensinh/99_USB_VIP/00_usb/BT_VIP_000005/trunk/brtvip/vips/brt_usb/verif/../design/brt_usb_base_config.sv(575) @ 0: reporter [cfg] Device Configuration setup ---------------------------------------------------------------------------------------------------------------
+Name                                                  Type                             Size  Value             
+---------------------------------------------------------------------------------------------------------------
+brt_usb_agent_config                                  brt_usb_agent_config             -     @502              
+  component_type                                      brt_usb_types::component_type_e  1     DEVICE            
+  local_host_cfg                                      object                           -     <null>            
+  local_device_cfg_size                               integral                         32    'h1               
+  local_device_cfg                                    da(object)                       1     -                 
+    [0]                                               brt_usb_device_config            -     @503              
+      device_address                                  integral                         7     'h0               
+      connected_hub_device_address                    integral                         7     'h0               
+      connected_bus_speed                             brt_usb_types::speed_e           2     FS                
+      functionality_support                           brt_usb_types::speed_e           2     FS                
+      num_endpoints                                   integral                         32    'h10              
+      remote_wakeup_capable                           integral                         1     'h0               
+      endpoint_cfg                                    da(object)                       16    -                 
+        [0]                                           brt_usb_endpoint_config          -     @511              
+          ep_number                                   integral                         32    'h0               
+          interval                                    integral                         32    'h1               
+          max_burst_size                              integral                         32    'd0               
+          max_packet_size                             integral                         32    'd64              
+          max_num_nak_per_transfer                    integral                         32    'd1000            
+          supports_ustreams                           integral                         1     'h0               
+          allow_aligned_transfer_without_zero_length  integral                         1     'h0               
+          allow_zero_length_after_ping                integral                         1     'h0               
+          allow_spurious_erdy_after_polling           integral                         1     'h0               
+          direction                                   brt_usb_types::ep_dir_e          2     OUT               
+          ep_type                                     brt_usb_types::ep_type_e         2     CONTROL           
+        [1]                                           brt_usb_endpoint_config          -     @512              
+          ep_number                                   integral                         32    'h1               
+          interval                                    integral                         32    'h1               
+          max_burst_size                              integral                         32    'd0               
+          max_packet_size                             integral                         32    'd64              
+          max_num_nak_per_transfer                    integral                         32    'd1000            
+          supports_ustreams                           integral                         1     'h0               
+          allow_aligned_transfer_without_zero_length  integral                         1     'h0               
+          allow_zero_length_after_ping                integral                         1     'h0               
+          allow_spurious_erdy_after_polling           integral                         1     'h0               
+          direction                                   brt_usb_types::ep_dir_e          2     IN                
+          ep_type                                     brt_usb_types::ep_type_e         2     BULK              
+        [2]                                           brt_usb_endpoint_config          -     @513              
+          ep_number                                   integral                         32    'h2               
+          interval                                    integral                         32    'h0               
+          max_burst_size                              integral                         32    'd0               
+          max_packet_size                             integral                         32    'd64              
+          max_num_nak_per_transfer                    integral                         32    'd1000            
+          supports_ustreams                           integral                         1     'h0               
+          allow_aligned_transfer_without_zero_length  integral                         1     'h0               
+          allow_zero_length_after_ping                integral                         1     'h0               
+          allow_spurious_erdy_after_polling           integral                         1     'h0               
+          direction                                   brt_usb_types::ep_dir_e          2     OUT               
+          ep_type                                     brt_usb_types::ep_type_e         2     BULK              
+        [3]                                           brt_usb_endpoint_config          -     @514              
+          ep_number                                   integral                         32    'h3               
+          interval                                    integral                         32    'h1               
+          max_burst_size                              integral                         32    'd0               

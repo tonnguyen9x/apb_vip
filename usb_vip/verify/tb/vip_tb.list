@@ -1,0 +1,16 @@
++define+WAVE
+-f $BRTVIP_COMMON_ROOT/brt_uvm.lst
++incdir+$BRTVIP_VERIF_USB_ROOT/testcases
++incdir+$BRTVIP_VERIF_USB_ROOT/sequences
++incdir+$BRTVIP_VERIF_USB_ROOT/sv
++incdir+$BRTVIP_VERIF_USB_ROOT/sv/dut
+
+// VIP Design list
+-f $BRTVIP_USB_ROOT/design/brt_usb.f
+
+// Testbench list
+$BRTVIP_VERIF_USB_ROOT/sv/dut/brt_usb_ss_serial_dut_sv_wrapper.sv
+$BRTVIP_VERIF_USB_ROOT/sv/brt_usb_env_pkg.sv
+$BRTVIP_VERIF_USB_ROOT/sequences/brt_usb_seq_pkg.sv
+$BRTVIP_VERIF_USB_ROOT/testcases/brt_usb_test_pkg.sv
+$BRTVIP_VERIF_USB_ROOT/sv/brt_usb_tb_top.sv

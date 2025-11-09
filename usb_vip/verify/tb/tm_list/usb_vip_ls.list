@@ -1,0 +1,89 @@
+#------------------------------------------------------------------------------
+#Content of list file:
+# Part 1: give argument to call and change easily
+# + default: this is assigned to "run pattern_name"
+# + option_##: this is assigned to "run pattern_name option#"
+# Part 2: tm name and argument.
+# + If no argument is assigned, the default option is chosen
+# + If one argument is assigned, option_## is chosen
+# + If more one arguments are assigned, this parses all arguments to run script
+#------------------------------------------------------------------------------
+
+# Part 1: give argument to call and change easily
+default: ls 1
+option_ls_all: ls 1 all
+option_ls_run: ls 1 run
+# Part 2: tm name and argument.
+brt_usb_control_setup_deserr_vseq_test                 option_ls_all 
+brt_usb_bulk_out_mps8_vseq_test                        option_ls_run 
+brt_usb_control_in_token_deserr_vseq_test              option_ls_run 
+brt_usb_control_in_littledata_vseq_test                option_ls_run 
+brt_usb_control_setup_dev_eoperr_vseq_test             option_ls_run 
+brt_usb_control_out_dev_stall_vseq_test                option_ls_run 
+brt_usb_control_setup_data0_bitstufferr_vseq_test      option_ls_run 
+brt_usb_control_in_token_toggleerr_vseq_test           option_ls_run 
+brt_usb_bulk_out_align_w_zerolen_vseq_test             option_ls_run 
+brt_usb_control_setup_data0_wrongpid_vseq_test         option_ls_run 
+brt_usb_bulk_in_zerolen_vseq_test                      option_ls_run 
+brt_usb_control_setup_nak_vseq_test                    option_ls_run 
+brt_usb_control_in_ack_piderr_vseq_test                option_ls_run 
+brt_usb_control_setup_piderr_vseq_test                 option_ls_run 
+brt_usb_bulk_in_align_w_zerolen_vseq_test              option_ls_run 
+brt_usb_control_setup_crc5err_vseq_test                option_ls_run 
+brt_usb_control_statusout_ack_piderr_vseq_test         option_ls_run 
+brt_usb_control_in_dev_data_erreop_vseq_test           option_ls_run 
+brt_usb_control_setup_eoperr_vseq_test                 option_ls_run 
+brt_usb_control_2stage_vseq_test                       option_ls_run 
+brt_usb_control_3stage_vseq_test                       option_ls_run 
+brt_usb_bulk_in_align_short_zerolen_vseq_test          option_ls_run 
+brt_usb_control_in_ack_wrongpid_vseq_test              option_ls_run 
+brt_usb_control_setup_data0_eoperr_vseq_test           option_ls_run 
+brt_usb_control_setup_dev_piderr_vseq_test             option_ls_run 
+brt_usb_control_in_token_piderr_vseq_test              option_ls_run 
+brt_usb_control_setup_wrongpid_vseq_test               option_ls_run 
+brt_usb_bulk_out_align_wo_zerolen_vseq_test            option_ls_run 
+brt_usb_control_setup_stall_vseq_test                  option_ls_run 
+brt_usb_control_setup_data0_babbleerr_vseq_test        option_ls_run 
+brt_usb_bulk_out_zerolen_vseq_test                     option_ls_run 
+brt_usb_reset_handshake_quick_resume_vseq_test         option_ls_run 
+brt_usb_control_in_dev_data_babble_errcrc16_vseq_test  option_ls_run 
+brt_usb_bulk_in_align_wo_zerolen_vseq_test             option_ls_run 
+brt_usb_bulk_in_mps8_vseq_test                         option_ls_run 
+brt_usb_control_setup_data0_crc16err_vseq_test         option_ls_run 
+brt_usb_control_setup_data0_piderr_vseq_test           option_ls_run 
+
+brt_usb_control_in_ack_timeout_vseq_test               option_ls_run
+brt_usb_control_in_data_nak_vseq_test                  option_ls_run                                
+brt_usb_control_out_dev_nak_vseq_test                  option_ls_run                                
+brt_usb_control_out_token_crc5err_vseq_test            option_ls_run                                      
+
+
+brt_usb_int_in_mps8_vseq_test                                     option_ls_run           
+brt_usb_int_in_align_short_zerolen_vseq_test                      option_ls_run                          
+brt_usb_int_in_align_wo_zerolen_vseq_test                         option_ls_run                       
+brt_usb_int_in_align_w_zerolen_vseq_test                          option_ls_run                      
+brt_usb_int_in_token_pid_err_vseq_test                            option_ls_run                    
+brt_usb_int_in_token_crc5_err_vseq_test                           option_ls_run                     
+brt_usb_int_in_token_rty_vseq_test                                option_ls_run                
+brt_usb_int_in_nak_vseq_test                                      option_ls_run          
+brt_usb_int_in_stall_vseq_test                                    option_ls_run            
+brt_usb_int_out_mps8_vseq_test                                    option_ls_run            
+brt_usb_int_out_align_wo_zerolen_vseq_test                        option_ls_run                        
+brt_usb_int_out_align_w_zerolen_vseq_test                         option_ls_run                       
+brt_usb_int_out_pid_err_vseq_test                                 option_ls_run               
+brt_usb_int_out_crc5_err_vseq_test                                option_ls_run                
+brt_usb_int_out_crc16_err_vseq_test                               option_ls_run                 
+brt_usb_int_out_timeout_vseq_test                                 option_ls_run               
+brt_usb_int_out_nak_vseq_test                                     option_ls_run           
+brt_usb_int_out_stall_vseq_test                                   option_ls_run             
+
+#LPM
+brt_usb_lpm_dev_resume_vseq_test                                  option_ls_run
+brt_usb_lpm_normal_vseq_test                                      option_ls_run
+brt_usb_lpm_timeout_vseq_test                                     option_ls_run
+brt_usb_lpm_stall_vseq_test                                       option_ls_run
+brt_usb_lpm_nyet_vseq_test                                        option_ls_run
+brt_usb_lpm_ack_exterr_lpmerr_vseq_test                           option_ls_run
+brt_usb_lpm_ack_piderr_vseq_test                                  option_ls_run
+
+
