@@ -1,0 +1,484 @@
+%% USB VIP Sequence Diagrams
+%% Detailed sequence diagrams for different USB transfer types
+
+%% ===========================================================================
+%% SEQUENCE 1: Control Transfer - GET_DESCRIPTOR
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[0]
+    participant Driver as USB Driver
+    participant Device
+
+    Note over Test,Device: Control Transfer: GET_DESCRIPTOR (Device Descriptor)
+
+    Test->>XSeq: Create CONTROL_TRANSFER<br/>addr=0, ep=0<br/>bmRequestType=0x80 (IN)<br/>bRequest=GET_DESCRIPTOR<br/>wValue=0x0100 (Device)<br/>wLength=18
+
+    Note over XSeq,X2P: SETUP Stage
+
+    XSeq->>X2P: Forward transfer (SETUP_STATE)
+    X2P->>Driver: TOKEN(SETUP, addr=0, ep=0)
+    Driver->>Device: SETUP packet
+    X2P->>Driver: DATA0(8 bytes setup data)
+    Driver->>Device: Setup data packet
+    Device->>Driver: ACK
+    Driver->>X2P: ACK received
+
+    Note over XSeq,X2P: DATA Stage (IN direction, wLength=18)
+
+    X2P->>Driver: TOKEN(IN, addr=0, ep=0)
+    Driver->>Device: IN token
+    Device->>Driver: DATA1(18 bytes descriptor)
+    Driver->>X2P: Descriptor data received
+    X2P->>Driver: ACK
+    Driver->>Device: ACK
+
+    Note over XSeq,X2P: STATUS Stage (OUT direction)
+
+    X2P->>Driver: TOKEN(OUT, addr=0, ep=0)
+    Driver->>Device: OUT token
+    X2P->>Driver: DATA1(0 bytes)
+    Driver->>Device: Zero-length packet
+    Device->>Driver: ACK
+    Driver->>X2P: ACK received
+
+    X2P->>XSeq: Transfer complete (ACCEPT)
+    XSeq->>Test: Status: SUCCESS
+
+%% ===========================================================================
+%% SEQUENCE 2: Control Transfer - SET_ADDRESS
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[0]
+    participant Driver as USB Driver
+    participant Device
+
+    Note over Test,Device: Control Transfer: SET_ADDRESS (Address = 5)
+
+    Test->>XSeq: Create CONTROL_TRANSFER<br/>addr=0, ep=0<br/>bmRequestType=0x00 (OUT)<br/>bRequest=SET_ADDRESS<br/>wValue=5<br/>wLength=0
+
+    Note over XSeq,X2P: SETUP Stage
+
+    XSeq->>X2P: Forward transfer (SETUP_STATE)
+    X2P->>Driver: TOKEN(SETUP, addr=0, ep=0)
+    Driver->>Device: SETUP packet
+    X2P->>Driver: DATA0(8 bytes setup)
+    Driver->>Device: Setup data
+    Device->>Driver: ACK
+    Driver->>X2P: ACK received
+
+    Note over XSeq,X2P: No DATA Stage (wLength=0)
+
+    Note over XSeq,X2P: STATUS Stage (IN direction)
+
+    X2P->>Driver: TOKEN(IN, addr=0, ep=0)
+    Driver->>Device: IN token
+    Device->>Driver: DATA1(0 bytes)
+    Driver->>X2P: Zero-length data
+    X2P->>Driver: ACK
+    Driver->>Device: ACK
+
+    Note over Device: Device now has address 5
+
+    X2P->>XSeq: Transfer complete (ACCEPT)
+    XSeq->>Test: Status: SUCCESS
+
+%% ===========================================================================
+%% SEQUENCE 3: Bulk OUT Transfer with PING
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[2]
+    participant Driver as USB Driver
+    participant HS_Device as HS Device
+
+    Note over Test,HS_Device: Bulk OUT Transfer (High Speed with PING)
+
+    Test->>XSeq: Create BULK_OUT_TRANSFER<br/>addr=5, ep=2<br/>payload=512 bytes
+
+    XSeq->>X2P: Forward transfer
+
+    Note over X2P,HS_Device: PING to check if ready
+
+    X2P->>Driver: TOKEN(PING, addr=5, ep=2)
+    Driver->>HS_Device: PING packet
+
+    alt Device Ready
+        HS_Device->>Driver: ACK
+        Driver->>X2P: ACK received
+
+        Note over X2P,HS_Device: Send actual data
+
+        X2P->>Driver: TOKEN(OUT, addr=5, ep=2)
+        Driver->>HS_Device: OUT token
+        X2P->>Driver: DATA0(512 bytes)
+        Driver->>HS_Device: Data packet
+        HS_Device->>Driver: ACK
+        Driver->>X2P: ACK received
+
+        X2P->>XSeq: Transfer complete (ACCEPT)
+        XSeq->>Test: Status: SUCCESS
+
+    else Device Not Ready
+        HS_Device->>Driver: NAK
+        Driver->>X2P: NAK received
+
+        Note over X2P: Wait and retry PING
+
+        X2P->>Driver: TOKEN(PING, addr=5, ep=2)
+        Driver->>HS_Device: PING packet (retry)
+        HS_Device->>Driver: ACK (now ready)
+        Driver->>X2P: ACK received
+
+        X2P->>Driver: TOKEN(OUT, addr=5, ep=2)
+        Driver->>HS_Device: OUT token
+        X2P->>Driver: DATA0(512 bytes)
+        Driver->>HS_Device: Data packet
+        HS_Device->>Driver: ACK
+        Driver->>X2P: ACK received
+
+        X2P->>XSeq: Transfer complete (ACCEPT)
+        XSeq->>Test: Status: SUCCESS
+    end
+
+%% ===========================================================================
+%% SEQUENCE 4: Bulk IN Transfer with NAK
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[1]
+    participant Driver as USB Driver
+    participant Device
+
+    Note over Test,Device: Bulk IN Transfer (with NAK retry)
+
+    Test->>XSeq: Create BULK_IN_TRANSFER<br/>addr=5, ep=1<br/>expected=64 bytes
+
+    XSeq->>X2P: Forward transfer
+
+    Note over X2P,Device: First attempt
+
+    X2P->>Driver: TOKEN(IN, addr=5, ep=1)
+    Driver->>Device: IN token
+    Device->>Driver: NAK (no data ready)
+    Driver->>X2P: NAK received
+
+    Note over X2P: Retry after delay
+
+    X2P->>Driver: TOKEN(IN, addr=5, ep=1)
+    Driver->>Device: IN token (retry)
+    Device->>Driver: NAK (still not ready)
+    Driver->>X2P: NAK received
+
+    Note over X2P: Retry again
+
+    X2P->>Driver: TOKEN(IN, addr=5, ep=1)
+    Driver->>Device: IN token (retry)
+    Device->>Driver: DATA0(64 bytes)
+    Driver->>X2P: Data received
+    X2P->>Driver: ACK
+    Driver->>Device: ACK
+
+    X2P->>XSeq: Transfer complete (ACCEPT)
+    XSeq->>Test: Status: SUCCESS<br/>Data: 64 bytes
+
+%% ===========================================================================
+%% SEQUENCE 5: Interrupt IN Transfer - Periodic Polling
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[3]
+    participant Driver as USB Driver
+    participant Device
+    participant SOF as SOF Generator
+
+    Note over Test,Device: Interrupt IN Transfer (bInterval=10)
+
+    Test->>XSeq: Create INTERRUPT_IN_TRANSFER<br/>addr=5, ep=3<br/>bInterval=10 frames
+
+    Note over SOF: Frame 0
+    SOF->>Driver: SOF(frame=0)
+
+    Note over X2P,Device: Poll endpoint
+
+    XSeq->>X2P: Start transfer
+    X2P->>Driver: TOKEN(IN, addr=5, ep=3)
+    Driver->>Device: IN token
+    Device->>Driver: NAK (no data)
+    Driver->>X2P: NAK received
+
+    Note over SOF: Frames 1-9 (skip per bInterval)
+
+    Note over SOF: Frame 10
+    SOF->>Driver: SOF(frame=10)
+
+    Note over X2P,Device: Poll again (bInterval elapsed)
+
+    X2P->>Driver: TOKEN(IN, addr=5, ep=3)
+    Driver->>Device: IN token
+    Device->>Driver: DATA0(8 bytes)
+    Driver->>X2P: Interrupt data
+    X2P->>Driver: ACK
+    Driver->>Device: ACK
+
+    X2P->>XSeq: Transfer complete (ACCEPT)
+    XSeq->>Test: Status: SUCCESS<br/>Data: 8 bytes
+
+    Note over SOF: Frame 20
+    SOF->>Driver: SOF(frame=20)
+
+    Note over X2P,Device: Next polling interval
+
+    Test->>XSeq: Next INTERRUPT_IN
+    XSeq->>X2P: Start transfer
+    X2P->>Driver: TOKEN(IN, addr=5, ep=3)
+    Driver->>Device: IN token
+    Device->>Driver: DATA1(8 bytes)
+    Driver->>X2P: Data (toggled)
+    X2P->>Driver: ACK
+    Driver->>Device: ACK
+
+    X2P->>XSeq: Transfer complete
+    XSeq->>Test: Status: SUCCESS
+
+%% ===========================================================================
+%% SEQUENCE 6: Isochronous OUT Transfer
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq[4]
+    participant Driver as USB Driver
+    participant Device
+    participant SOF as SOF Generator
+
+    Note over Test,Device: Isochronous OUT Transfer (Audio streaming)
+
+    Test->>XSeq: Create ISOCHRONOUS_OUT_TRANSFER<br/>addr=5, ep=4<br/>payload=192 bytes/frame
+
+    Note over SOF: Frame 0
+    SOF->>Driver: SOF(frame=0)
+
+    XSeq->>X2P: Transfer for frame 0
+    X2P->>Driver: TOKEN(OUT, addr=5, ep=4)
+    Driver->>Device: OUT token
+    X2P->>Driver: DATA0(192 bytes audio)
+    Driver->>Device: Audio data
+
+    Note over Device: No handshake!<br/>Process immediately
+
+    Note over SOF: Frame 1
+    SOF->>Driver: SOF(frame=1)
+
+    XSeq->>X2P: Transfer for frame 1
+    X2P->>Driver: TOKEN(OUT, addr=5, ep=4)
+    Driver->>Device: OUT token
+    X2P->>Driver: DATA1(192 bytes audio)
+    Driver->>Device: Audio data
+
+    Note over Device: Data toggle for sync<br/>Still no handshake
+
+    Note over SOF: Frame 2
+    SOF->>Driver: SOF(frame=2)
+
+    Note over X2P,Device: Missed frame (simulated error)
+
+    Note over Device: Detects missing data<br/>Outputs silence or<br/>interpolates
+
+    Note over SOF: Frame 3
+    SOF->>Driver: SOF(frame=3)
+
+    XSeq->>X2P: Transfer for frame 3
+    X2P->>Driver: TOKEN(OUT, addr=5, ep=4)
+    Driver->>Device: OUT token
+    X2P->>Driver: DATA0(192 bytes audio)
+    Driver->>Device: Audio data
+
+    Note over Device: Resumes streaming
+
+    X2P->>XSeq: All transfers sent
+    XSeq->>Test: Status: COMPLETED<br/>(Note: Frame 2 lost)
+
+%% ===========================================================================
+%% SEQUENCE 7: Split Transaction (HS Hub + FS Device)
+%% ===========================================================================
+
+sequenceDiagram
+    participant HS_Host as HS Host
+    participant Hub as HS Hub
+    participant FS_Device as FS Device
+
+    Note over HS_Host,FS_Device: Split Transaction: Bulk OUT to FS device via HS hub
+
+    Note over HS_Host,Hub: Start Split (SSPLIT) Phase - High Speed
+
+    HS_Host->>Hub: TOKEN(SPLIT, S=0, hub_addr=1, port=2)
+    Note over Hub: S=0 means Start Split
+    HS_Host->>Hub: TOKEN(OUT, addr=5, ep=1)
+    HS_Host->>Hub: DATA0(64 bytes)
+    Hub->>HS_Host: ACK
+
+    Note over Hub,FS_Device: Hub buffers and forwards to FS device
+
+    Hub->>FS_Device: TOKEN(OUT, addr=5, ep=1) [Full Speed]
+    Hub->>FS_Device: DATA0(64 bytes) [Full Speed]
+    FS_Device->>Hub: ACK [Full Speed]
+
+    Note over HS_Host,Hub: Complete Split (CSPLIT) Phase - High Speed<br/>Host polls for completion
+
+    HS_Host->>Hub: TOKEN(SPLIT, S=1, hub_addr=1, port=2)
+    Note over Hub: S=1 means Complete Split
+    HS_Host->>Hub: TOKEN(OUT, addr=5, ep=1)
+
+    alt Transaction Complete
+        Hub->>HS_Host: ACK (transaction complete)
+        Note over HS_Host: Transfer successful
+
+    else Transaction Pending
+        Hub->>HS_Host: NYET (not yet, still processing)
+        Note over HS_Host: Retry CSPLIT later
+
+        HS_Host->>Hub: TOKEN(SPLIT, S=1, hub_addr=1, port=2) [Retry]
+        HS_Host->>Hub: TOKEN(OUT, addr=5, ep=1)
+        Hub->>HS_Host: ACK (now complete)
+
+    else Device NAK'd
+        Hub->>HS_Host: NAK (device not ready)
+        Note over HS_Host: Restart from SSPLIT
+    end
+
+%% ===========================================================================
+%% SEQUENCE 8: Error Recovery - Lost ACK
+%% ===========================================================================
+
+sequenceDiagram
+    participant Host
+    participant Device
+
+    Note over Host,Device: Bulk OUT Transfer with Lost ACK
+
+    Note over Host,Device: Initial Transaction (DATA0)
+
+    Host->>Device: TOKEN(OUT, addr=5, ep=1)
+    Host->>Device: DATA0(64 bytes)
+    Device->>Host: ACK
+    Note over Host,Device: ACK packet corrupted/lost in transit
+
+    Note over Host: Timeout waiting for ACK<br/>Assumes failure
+    Note over Host: DATA toggle still DATA0<br/>(no toggle on failure)
+
+    Note over Device: ACK sent successfully<br/>Toggle advanced to DATA1<br/>Data processed
+
+    Note over Host,Device: Host Retries (still DATA0)
+
+    Host->>Device: TOKEN(OUT, addr=5, ep=1)
+    Host->>Device: DATA0(64 bytes) [Duplicate!]
+
+    Note over Device: Receives DATA0 again<br/>Expected DATA1<br/>Recognizes duplicate
+
+    Device->>Device: Discard duplicate data<br/>Don't process again
+    Device->>Host: ACK (acknowledge duplicate)
+    Note over Device: Toggle still DATA1<br/>(already advanced)
+
+    Note over Host: Receives ACK<br/>Advance toggle to DATA1
+
+    Note over Host,Device: Now synchronized - Next Transaction
+
+    Host->>Device: TOKEN(OUT, addr=5, ep=1)
+    Host->>Device: DATA1(64 bytes) [New data]
+    Device->>Host: ACK
+
+    Note over Host,Device: Both at DATA1, sync maintained
+
+%% ===========================================================================
+%% SEQUENCE 9: Endpoint Stall and Clear
+%% ===========================================================================
+
+sequenceDiagram
+    participant Host
+    participant Device
+
+    Note over Host,Device: Bulk IN Transfer - Endpoint Stalled
+
+    Host->>Device: TOKEN(IN, addr=5, ep=1)
+    Device->>Host: STALL
+
+    Note over Host: Endpoint halted!<br/>Must clear feature
+
+    Note over Host,Device: CLEAR_FEATURE Control Transfer
+
+    Host->>Device: TOKEN(SETUP, addr=5, ep=0)
+    Host->>Device: DATA0(CLEAR_FEATURE, ep=1)
+    Device->>Host: ACK
+
+    Note over Host,Device: STATUS Stage
+
+    Host->>Device: TOKEN(IN, addr=5, ep=0)
+    Device->>Host: DATA1(0 bytes)
+    Host->>Device: ACK
+
+    Note over Device: Endpoint 1 un-halted<br/>Data toggle reset to DATA0
+
+    Note over Host,Device: Retry Original Transfer
+
+    Host->>Device: TOKEN(IN, addr=5, ep=1)
+    Device->>Host: DATA0(64 bytes)
+    Host->>Device: ACK
+
+    Note over Host,Device: Transfer successful
+
+%% ===========================================================================
+%% SEQUENCE 10: LPM (Link Power Management) Transaction
+%% ===========================================================================
+
+sequenceDiagram
+    participant Host
+    participant Device
+
+    Note over Host,Device: LPM Transaction - Enter L1 Sleep
+
+    Note over Host: Device idle,<br/>request L1 state
+
+    Host->>Device: TOKEN(LPM, addr=5, ep=0)<br/>HIRD=10, RemoteWake=1
+
+    Note over Device: Check if can enter L1<br/>Not in middle of transfer
+
+    alt Device Can Sleep
+        Device->>Host: ACK
+        Note over Device: Enter L1 state<br/>HIRD = 10 * 75μs = 750μs<br/>resume time
+
+        Note over Host,Device: Device in L1 sleep state
+
+        Note over Host: Time to resume<br/>send Resume signaling
+
+        Host->>Device: Resume (K-state for 20ms)
+        Note over Device: Wake from L1<br/>Wait HIRD time<br/>Return to active
+
+        Note over Host,Device: Device active again
+
+    else Device Busy
+        Device->>Host: NYET
+        Note over Host: Device busy<br/>try LPM later
+
+    else LPM Not Supported
+        Device->>Host: STALL
+        Note over Host: Device doesn't<br/>support LPM
+    end
+
+    Note over Host,Device: Back to normal operation
+
+    Host->>Device: TOKEN(IN, addr=5, ep=1)
+    Device->>Host: DATA0(64 bytes)
+    Host->>Device: ACK

@@ -1,0 +1,434 @@
+%% USB VIP Architecture Diagrams
+%% These Mermaid diagrams can be rendered using Mermaid Live Editor or integrated into documentation
+
+%% ===========================================================================
+%% DIAGRAM 1: Complete System Architecture
+%% ===========================================================================
+
+graph TB
+    subgraph "Test Environment"
+        TEST[Test Bench<br/>UVM Test]
+        ENV[Environment<br/>brt_usb_env]
+    end
+
+    subgraph "USB Agent"
+        AGENT[USB Agent<br/>brt_usb_agent]
+
+        subgraph "Sequencer Hierarchy"
+            VSEQ[Virtual Sequencer]
+            XSEQ[Transfer Sequencer]
+            PSEQ[Packet Sequencer]
+            DSEQ[Data Sequencer]
+            LSSEQ[Link Service Sequencer]
+            PRSSEQ[Protocol Service Sequencer]
+        end
+
+        subgraph "Layering Components"
+            X2P[Transfer→Packet<br/>x2p_seq<br/>16 instances]
+            P2D[Packet→Data<br/>p2d_seq]
+            D2P[Data→Packet Monitor<br/>link_mon]
+            P2X[Packet→Transfer Monitor<br/>prot_mon]
+        end
+
+        subgraph "Protocol Stack"
+            PROT[Protocol Layer<br/>brt_usb_protocol]
+            LINK[Link Layer<br/>brt_usb_link]
+            PHYS[Physical Layer<br/>brt_usb_physical]
+        end
+
+        subgraph "Driver/Monitor"
+            DRV[Driver<br/>brt_usb_driver]
+            MON[Monitor<br/>brt_usb_monitor]
+        end
+    end
+
+    subgraph "Physical Interface"
+        INTF_SERIAL[Serial Interface<br/>DP/DM]
+        INTF_UTMI[UTMI Interface<br/>8-bit parallel]
+    end
+
+    subgraph "Device Under Test"
+        DUT[DUT<br/>USB Controller]
+    end
+
+    %% Connections
+    TEST --> ENV
+    ENV --> AGENT
+
+    AGENT --> VSEQ
+    VSEQ --> XSEQ
+    VSEQ --> PSEQ
+    VSEQ --> DSEQ
+    VSEQ --> LSSEQ
+    VSEQ --> PRSSEQ
+
+    XSEQ --> X2P
+    X2P --> PSEQ
+    PSEQ --> P2D
+    P2D --> DSEQ
+
+    DSEQ --> PROT
+    PROT --> LINK
+    LINK --> PHYS
+
+    PHYS --> DRV
+    PHYS --> MON
+
+    DRV --> INTF_SERIAL
+    DRV --> INTF_UTMI
+    MON --> INTF_SERIAL
+    MON --> INTF_UTMI
+
+    MON --> D2P
+    D2P --> P2X
+
+    INTF_SERIAL --> DUT
+    INTF_UTMI --> DUT
+
+    %% Styling
+    classDef testClass fill:#e1f5ff,stroke:#333,stroke-width:2px
+    classDef seqClass fill:#fff4e1,stroke:#333,stroke-width:2px
+    classDef layerClass fill:#ffe1f5,stroke:#333,stroke-width:2px
+    classDef protocolClass fill:#e1ffe1,stroke:#333,stroke-width:2px
+    classDef drvClass fill:#f5e1e1,stroke:#333,stroke-width:2px
+    classDef intfClass fill:#e1e1ff,stroke:#333,stroke-width:2px
+
+    class TEST,ENV testClass
+    class VSEQ,XSEQ,PSEQ,DSEQ,LSSEQ,PRSSEQ seqClass
+    class X2P,P2D,D2P,P2X layerClass
+    class PROT,LINK,PHYS protocolClass
+    class DRV,MON drvClass
+    class INTF_SERIAL,INTF_UTMI,DUT intfClass
+
+%% ===========================================================================
+%% DIAGRAM 2: Transaction Data Flow (TX)
+%% ===========================================================================
+
+graph LR
+    subgraph "TX Data Flow - Host Transmission"
+        T1[brt_usb_transfer<br/>BULK_IN<br/>addr=0x42, ep=1<br/>64 bytes]
+
+        T2[brt_usb_packet<br/>TOKEN: IN]
+        T3[brt_usb_packet<br/>DATA: DATA0]
+        T4[brt_usb_packet<br/>HANDSHAKE: ACK]
+
+        T5[brt_usb_data<br/>NRZI encoded<br/>Bit-stuffed<br/>TOKEN packet]
+        T6[brt_usb_data<br/>NRZI encoded<br/>Bit-stuffed<br/>DATA packet]
+        T7[brt_usb_data<br/>NRZI encoded<br/>Bit-stuffed<br/>HANDSHAKE]
+
+        T8[Physical Signals<br/>DP/DM or UTMI]
+    end
+
+    T1 -->|x2p_seq<br/>decompose| T2
+    T1 -->|x2p_seq<br/>decompose| T3
+    T1 -->|expect| T4
+
+    T2 -->|p2d_seq<br/>encode| T5
+    T3 -->|p2d_seq<br/>encode| T6
+    T4 -->|p2d_seq<br/>encode| T7
+
+    T5 -->|driver<br/>transmit| T8
+    T6 -->|driver<br/>transmit| T8
+    T7 -->|driver<br/>transmit| T8
+
+%% ===========================================================================
+%% DIAGRAM 3: Transaction Data Flow (RX)
+%% ===========================================================================
+
+graph RL
+    subgraph "RX Data Flow - Device Reception"
+        R8[Physical Signals<br/>DP/DM or UTMI]
+
+        R7[brt_usb_data<br/>Raw NRZI<br/>Bit-stuffed]
+
+        R6[brt_usb_packet<br/>Unpacked<br/>CRC verified]
+
+        R5[brt_usb_transfer<br/>Assembled<br/>Complete transfer]
+    end
+
+    R8 -->|monitor<br/>capture| R7
+    R7 -->|link_mon<br/>decode| R6
+    R6 -->|prot_mon<br/>assemble| R5
+
+%% ===========================================================================
+%% DIAGRAM 4: Sequencer Interaction
+%% ===========================================================================
+
+sequenceDiagram
+    participant Test
+    participant VSeq as Virtual Sequencer
+    participant XSeq as Transfer Sequencer
+    participant X2P as x2p_seq
+    participant PSeq as Packet Sequencer
+    participant P2D as p2d_seq
+    participant DSeq as Data Sequencer
+
+    Test->>VSeq: Start sequence
+    VSeq->>XSeq: Configure
+
+    Note over XSeq: Generate transfer
+    XSeq->>XSeq: Create brt_usb_transfer
+    XSeq->>X2P: Send transfer
+
+    Note over X2P: Decompose to packets
+    X2P->>X2P: Create TOKEN packet
+    X2P->>X2P: Create DATA packet
+    X2P->>PSeq: Send packets
+
+    PSeq->>P2D: Forward packets
+
+    Note over P2D: Encode to physical
+    P2D->>P2D: Add SYNC
+    P2D->>P2D: NRZI encode
+    P2D->>P2D: Bit-stuff
+    P2D->>P2D: Add EOP
+    P2D->>DSeq: Send data
+
+    DSeq->>DSeq: Drive to interface
+
+%% ===========================================================================
+%% DIAGRAM 5: Protocol Layer Callback Flow
+%% ===========================================================================
+
+graph TB
+    subgraph "Callback Mechanism"
+        PKT[Incoming Packet]
+        PROT[Protocol Layer]
+
+        CB1[packet_monitor_cb]
+        CB2[pre_handshake_cb]
+        CB3[pre_data_ready_cb]
+        CB4[pre_handshake_stall_cb]
+
+        ACTION1[Log/Analyze]
+        ACTION2[Modify Response]
+        ACTION3[Inject Error]
+        ACTION4[Force STALL]
+    end
+
+    PKT --> PROT
+
+    PROT -->|Trigger| CB1
+    PROT -->|Trigger| CB2
+    PROT -->|Trigger| CB3
+    PROT -->|Trigger| CB4
+
+    CB1 --> ACTION1
+    CB2 --> ACTION2
+    CB3 --> ACTION3
+    CB4 --> ACTION4
+
+    ACTION2 -->|Override| PROT
+    ACTION3 -->|Override| PROT
+    ACTION4 -->|Override| PROT
+
+%% ===========================================================================
+%% DIAGRAM 6: State Machine - Transfer Execution
+%% ===========================================================================
+
+stateDiagram-v2
+    [*] --> INITIAL
+
+    INITIAL --> RUNNING : Start transfer
+
+    RUNNING --> ACCEPT : All packets ACK
+    RUNNING --> RETRY : NAK received
+    RUNNING --> PARTIAL_ACCEPT : Partial completion
+    RUNNING --> DISABLED : Endpoint disabled
+    RUNNING --> CANCELLED : User cancelled
+    RUNNING --> ABORTED : Error/Timeout
+
+    RETRY --> RUNNING : Retry attempt
+    PARTIAL_ACCEPT --> RUNNING : Continue transfer
+
+    ACCEPT --> [*]
+    DISABLED --> [*]
+    CANCELLED --> [*]
+    ABORTED --> [*]
+
+    note right of INITIAL
+        Transfer created
+        Resources allocated
+    end note
+
+    note right of RUNNING
+        Packets being transmitted
+        Waiting for responses
+    end note
+
+    note right of RETRY
+        Device not ready
+        Will retry transaction
+    end note
+
+    note right of ACCEPT
+        Transfer successful
+        All data transferred
+    end note
+
+%% ===========================================================================
+%% DIAGRAM 7: Endpoint Configuration
+%% ===========================================================================
+
+graph TB
+    subgraph "Endpoint Configuration Structure"
+        EP_CFG[Endpoint Configuration]
+
+        EP_NUM[Endpoint Number<br/>0-15]
+        EP_DIR[Direction<br/>IN/OUT/UNDEFDIR]
+        EP_TYPE[Type<br/>CONTROL/BULK/INT/ISO]
+        EP_SPEED[Speed<br/>LS/FS/HS]
+        EP_MPS[Max Packet Size<br/>8/16/32/64/512/1024]
+        EP_INTERVAL[Polling Interval<br/>bInterval]
+        EP_TOGGLE[Data Toggle<br/>DATA0/DATA1]
+        EP_MULT[Transactions/μFrame<br/>1-3 for HS]
+        EP_FIFO[FIFO Configuration]
+    end
+
+    EP_CFG --> EP_NUM
+    EP_CFG --> EP_DIR
+    EP_CFG --> EP_TYPE
+    EP_CFG --> EP_SPEED
+    EP_CFG --> EP_MPS
+    EP_CFG --> EP_INTERVAL
+    EP_CFG --> EP_TOGGLE
+    EP_CFG --> EP_MULT
+    EP_CFG --> EP_FIFO
+
+    EP_TYPE -.Constraints.-> EP_MPS
+    EP_SPEED -.Constraints.-> EP_MPS
+    EP_TYPE -.Constraints.-> EP_INTERVAL
+
+%% ===========================================================================
+%% DIAGRAM 8: Error Handling Flow
+%% ===========================================================================
+
+graph TD
+    START[Send Packet] --> CHECK{Response?}
+
+    CHECK -->|ACK| SUCCESS[Transaction Complete]
+    CHECK -->|NAK| RETRY_CHECK{Retry Count?}
+    CHECK -->|STALL| HALT[Endpoint Halted]
+    CHECK -->|Timeout| ERROR_CHECK{Timeout Count?}
+    CHECK -->|CRC Error| CRC_CHECK{CRC Error Count?}
+    CHECK -->|Bit Stuff Err| STUFF_CHECK{Error Count?}
+
+    RETRY_CHECK -->|< Max| RETRY[Retry Transaction<br/>Same DATA PID]
+    RETRY_CHECK -->|≥ Max| ABORT[Abort Transfer]
+
+    ERROR_CHECK -->|< Max| RETRY
+    ERROR_CHECK -->|≥ Max| ABORT
+
+    CRC_CHECK -->|< Max| RETRY
+    CRC_CHECK -->|≥ Max| ABORT
+
+    STUFF_CHECK -->|< Max| RETRY
+    STUFF_CHECK -->|≥ Max| ABORT
+
+    RETRY --> START
+
+    HALT --> CLEAR{Clear Feature?}
+    CLEAR -->|Yes| RESET[Reset Endpoint<br/>Toggle to DATA0]
+    CLEAR -->|No| END[Transfer Failed]
+
+    RESET --> START
+    SUCCESS --> END
+    ABORT --> END
+
+    style SUCCESS fill:#90EE90
+    style ABORT fill:#FFB6C6
+    style HALT fill:#FFD700
+    style END fill:#D3D3D3
+
+%% ===========================================================================
+%% DIAGRAM 9: Speed Negotiation and Chirp
+%% ===========================================================================
+
+sequenceDiagram
+    participant Device
+    participant Hub/Host
+
+    Note over Device,Hub/Host: Device Attached (D+ pulled high)
+
+    Device->>Hub/Host: D+ pull-up (FS device) or D- pull-up (LS device)
+
+    Note over Hub/Host: Detect device attachment<br/>Wait 100ms debounce
+
+    Hub/Host->>Device: Reset (SE0 for 10ms+)
+
+    alt High Speed Capable Device
+        Note over Device,Hub/Host: Chirp Handshake
+
+        Device->>Hub/Host: Chirp K (D+/D- = 0/1)
+        Note over Hub/Host: Detect Chirp K<br/>within 2.5μs
+
+        Hub/Host->>Device: Alternating K-J Chirp<br/>(at least 6 pairs)
+        Note over Device: Detect K-J Chirp<br/>Switch to HS mode
+
+        Note over Device,Hub/Host: Connection at High Speed (480 Mbps)
+    else Full Speed Device (no chirp)
+        Note over Device,Hub/Host: No chirp response<br/>Connection at Full Speed (12 Mbps)
+    else Low Speed Device
+        Note over Device,Hub/Host: D- pull-up detected<br/>Connection at Low Speed (1.5 Mbps)
+    end
+
+    Hub/Host->>Device: Reset complete
+    Device->>Hub/Host: Ready for enumeration
+
+%% ===========================================================================
+%% DIAGRAM 10: Multi-Endpoint Transfer Management
+%% ===========================================================================
+
+graph TB
+    subgraph "Virtual Sequencer"
+        VSEQ[Virtual Sequencer]
+    end
+
+    subgraph "Endpoint 0 - Control"
+        X2P_0[x2p_seq[0]]
+        EP0[Control Endpoint<br/>Bidirectional]
+    end
+
+    subgraph "Endpoint 1 - Bulk IN"
+        X2P_1[x2p_seq[1]]
+        EP1[Bulk IN Endpoint]
+    end
+
+    subgraph "Endpoint 2 - Bulk OUT"
+        X2P_2[x2p_seq[2]]
+        EP2[Bulk OUT Endpoint]
+    end
+
+    subgraph "Endpoint 3 - Interrupt IN"
+        X2P_3[x2p_seq[3]]
+        EP3[Interrupt IN Endpoint]
+    end
+
+    subgraph "Common Packet Processing"
+        PSEQ[Packet Sequencer]
+        P2D[Packet→Data]
+        DSEQ[Data Sequencer]
+    end
+
+    VSEQ --> X2P_0
+    VSEQ --> X2P_1
+    VSEQ --> X2P_2
+    VSEQ --> X2P_3
+
+    X2P_0 --> EP0
+    X2P_1 --> EP1
+    X2P_2 --> EP2
+    X2P_3 --> EP3
+
+    EP0 --> PSEQ
+    EP1 --> PSEQ
+    EP2 --> PSEQ
+    EP3 --> PSEQ
+
+    PSEQ --> P2D
+    P2D --> DSEQ
+
+    style EP0 fill:#FFE4B5
+    style EP1 fill:#E0FFE0
+    style EP2 fill:#E0F0FF
+    style EP3 fill:#FFE0F0
